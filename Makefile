@@ -24,3 +24,11 @@ setup-golang-sdk:
 .PHONY: update-golang-sdk
 update-golang-sdk:
 	(cd featurevisor-go && git pull origin main)
+
+.PHONY: test
+test:
+	PYTHONPATH=src python3 -m unittest discover -s tests -v
+
+.PHONY: test-example-1
+test-example-1:
+	PYTHONPATH=src python3 -m featurevisor test --projectDirectoryPath=./monorepo/examples/example-1
