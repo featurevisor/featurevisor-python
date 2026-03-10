@@ -1,8 +1,10 @@
 # Featurevisor Python SDK
 
-This repository ports the latest Featurevisor JavaScript SDK to Python and includes a companion CLI for SDK validation tasks like `test`, `benchmark`, and `assess-distribution`.
+This repository ports the latest Featurevisor [JavaScript SDK](https://featurevisor.com/docs/sdks/javascript/) to Python.
 
 The package name is `featurevisor`, and it targets Python 3.10+.
+
+This SDK is compatible with [Featurevisor](https://featurevisor.com/) v2.0 projects and above.
 
 <!-- FEATUREVISOR_DOCS_BEGIN -->
 
@@ -34,11 +36,11 @@ f = create_instance({
 
 ## Evaluation Types
 
-The SDK evaluates three kinds of values against a feature:
+We can evaluate 3 types of values against a particular [feature](https://featurevisor.com/docs/features/):
 
-- Flag: whether the feature is enabled.
-- Variation: the selected variation value.
-- Variables: any variable values defined on the feature.
+- [**Flag**](#check-if-enabled) (`bool`): whether the feature is enabled or not
+- [**Variation**](#getting-variation) (`string`): the variation of the feature (if any)
+- [**Variables**](#getting-variables): variable values of the feature (if any)
 
 ## Context
 
@@ -232,9 +234,9 @@ f.close()
 The Python package also exposes a CLI:
 
 ```bash
-featurevisor test
-featurevisor benchmark
-featurevisor assess-distribution
+python -m featurevisor test
+python -m featurevisor benchmark
+python -m featurevisor assess-distribution
 ```
 
 These commands are intended for use from inside a Featurevisor project and rely on `npx featurevisor` being available locally.
@@ -244,20 +246,20 @@ These commands are intended for use from inside a Featurevisor project and rely 
 Run Featurevisor test specs using the Python SDK:
 
 ```bash
-featurevisor test \
+python -m featurevisor test \
   --projectDirectoryPath=/path/to/featurevisor-project
 ```
 
 Useful options:
 
 ```bash
-featurevisor test --keyPattern=foo
-featurevisor test --assertionPattern=variation
-featurevisor test --onlyFailures
-featurevisor test --showDatafile
-featurevisor test --verbose
-featurevisor test --with-tags
-featurevisor test --with-scopes
+python -m featurevisor test --keyPattern=foo
+python -m featurevisor test --assertionPattern=variation
+python -m featurevisor test --onlyFailures
+python -m featurevisor test --showDatafile
+python -m featurevisor test --verbose
+python -m featurevisor test --with-tags
+python -m featurevisor test --with-scopes
 ```
 
 ### Benchmark
@@ -265,7 +267,7 @@ featurevisor test --with-scopes
 Benchmark repeated Python SDK evaluations against a built datafile:
 
 ```bash
-featurevisor benchmark \
+python -m featurevisor benchmark \
   --projectDirectoryPath=/path/to/featurevisor-project \
   --environment=production \
   --feature=my_feature \
@@ -276,7 +278,7 @@ featurevisor benchmark \
 For variation benchmarks:
 
 ```bash
-featurevisor benchmark \
+python -m featurevisor benchmark \
   --projectDirectoryPath=/path/to/featurevisor-project \
   --environment=production \
   --feature=my_feature \
@@ -287,7 +289,7 @@ featurevisor benchmark \
 For variable benchmarks:
 
 ```bash
-featurevisor benchmark \
+python -m featurevisor benchmark \
   --projectDirectoryPath=/path/to/featurevisor-project \
   --environment=production \
   --feature=my_feature \
@@ -300,7 +302,7 @@ featurevisor benchmark \
 Inspect enabled/disabled and variation distribution over repeated evaluations:
 
 ```bash
-featurevisor assess-distribution \
+python -m featurevisor assess-distribution \
   --projectDirectoryPath=/path/to/featurevisor-project \
   --environment=production \
   --feature=my_feature \
@@ -311,7 +313,7 @@ featurevisor assess-distribution \
 You can also populate UUID-based context keys per iteration:
 
 ```bash
-featurevisor assess-distribution \
+python -m featurevisor assess-distribution \
   --projectDirectoryPath=/path/to/featurevisor-project \
   --environment=production \
   --feature=my_feature \
