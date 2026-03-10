@@ -344,6 +344,14 @@ PYTHONPATH=src python3 -m featurevisor test \
   --projectDirectoryPath=/path/to/featurevisor-project
 ```
 
+## Releasing
+
+- Update version in pyproject.toml
+- Push commit to main branch
+- Wait for CI to complete
+- Tag the release with the version number `vX.X.X`
+- This will trigger a new release to PyPI
+
 ## License
 
 MIT © [Fahad Heylaal](https://fahad19.com)
