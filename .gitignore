@@ -2,6 +2,7 @@
 specs
 monorepo
 featurevisor-go
+example-1
 
 # Bytecode / cache
 __pycache__/

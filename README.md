@@ -1,4 +1,4 @@
-# Featurevisor Python SDK
+# featurevisor-python
 
 This repository ports the latest Featurevisor [JavaScript SDK](https://featurevisor.com/docs/sdks/javascript/) to Python.
 
