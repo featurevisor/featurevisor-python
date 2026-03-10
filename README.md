@@ -321,7 +321,7 @@ python -m featurevisor assess-distribution \
   --populateUuid=deviceId
 ```
 
-<!-- FEATUREVISOR_DOCS_BEGIN -->
+<!-- FEATUREVISOR_DOCS_END -->
 
 ## Development
 
