@@ -27,6 +27,8 @@ class Example1IntegrationTests(unittest.TestCase):
     def test_example1_all(self) -> None:
         result = self._run("test", f"--projectDirectoryPath={ROOT}", "--onlyFailures")
         self.assertEqual(result.returncode, 0, msg=result.stdout + result.stderr)
+        self.assertIn("Test specs:", result.stdout)
+        self.assertIn("Assertions:", result.stdout)
 
     def test_benchmark_smoke(self) -> None:
         result = self._run(
@@ -43,6 +45,12 @@ class Example1IntegrationTests(unittest.TestCase):
     def test_example1_with_tags(self) -> None:
         result = self._run("test", f"--projectDirectoryPath={ROOT}", "--with-tags", "--onlyFailures")
         self.assertEqual(result.returncode, 0, msg=result.stdout + result.stderr)
+
+    def test_assertion_output_is_printed(self) -> None:
+        result = self._run("test", f"--projectDirectoryPath={ROOT}", "--keyPattern=allowSignup")
+        self.assertEqual(result.returncode, 0, msg=result.stdout + result.stderr)
+        self.assertIn("Testing: features/allowSignup.spec.yml", result.stdout)
+        self.assertIn("✔ Assertion #1: DE at 40% should have control variation", result.stdout)
 
 
 if __name__ == "__main__":

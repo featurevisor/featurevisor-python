@@ -4,6 +4,8 @@ This repository ports the latest Featurevisor JavaScript SDK to Python and inclu
 
 The package name is `featurevisor`, and it targets Python 3.10+.
 
+<!-- FEATUREVISOR_DOCS_BEGIN -->
+
 ## Installation
 
 ```bash
@@ -316,6 +318,8 @@ featurevisor assess-distribution \
   --populateUuid=userId \
   --populateUuid=deviceId
 ```
+
+<!-- FEATUREVISOR_DOCS_BEGIN -->
 
 ## Development
 

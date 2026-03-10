@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import sys
 import unittest
+from unittest.mock import patch
 
 sys.path.insert(0, "src")
 
-from featurevisor.cli import build_parser
+from featurevisor.cli import build_parser, main
 
 
 class CLITests(unittest.TestCase):
@@ -24,6 +25,10 @@ class CLITests(unittest.TestCase):
         self.assertEqual(args.feature, "foo")
         self.assertEqual(args.n, 20)
         self.assertTrue(args.variation)
+
+    def test_main_returns_non_zero_on_failed_tests(self) -> None:
+        with patch("featurevisor.cli.run_test_project", return_value=False):
+            self.assertEqual(main(["test"]), 1)
 
 
 if __name__ == "__main__":

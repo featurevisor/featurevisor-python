@@ -9,6 +9,15 @@ from .helpers import get_value_by_type
 from .hooks import HooksManager
 from .instance import FeaturevisorInstance, create_instance
 from .logger import Logger, create_logger, default_log_handler, loggerPrefix
+from .murmurhash import murmurhash_v3
+
+createInstance = create_instance
+createLogger = create_logger
+getBucketKey = get_bucket_key
+getBucketedNumber = get_bucketed_number
+getValueByType = get_value_by_type
+conditionIsMatched = condition_is_matched
+getValueFromContext = get_value_from_context
 
 __all__ = [
     "MAX_BUCKETED_NUMBER",
@@ -32,4 +41,12 @@ __all__ = [
     "get_value_by_type",
     "get_value_from_context",
     "loggerPrefix",
+    "murmurhash_v3",
+    "createInstance",
+    "createLogger",
+    "getBucketKey",
+    "getBucketedNumber",
+    "getValueByType",
+    "conditionIsMatched",
+    "getValueFromContext",
 ]

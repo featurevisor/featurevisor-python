@@ -13,6 +13,58 @@ from .logger import create_logger
 from .project import FeaturevisorProject, pretty_duration, timed_build
 
 
+def _stringify_value(value: Any) -> str:
+    if isinstance(value, (dict, list)):
+        return json.dumps(value)
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if value is None:
+        return "null"
+    return str(value)
+
+
+def _print_test_result(result: dict[str, Any], test_key: str) -> None:
+    print("")
+    print(f"Testing: {test_key}.yml ({pretty_duration(result['duration'] / 1000)})")
+    if result.get("notFound"):
+        print(f"  => {result['type']} {result['key']} not found")
+        return
+    print(f'  {result["type"]} "{result["key"]}":')
+    for assertion in result["assertions"]:
+        marker = "✔" if assertion["passed"] else "✘"
+        print(f"  {marker} {assertion['description']} ({pretty_duration(assertion['duration'] / 1000)})")
+        if assertion["passed"]:
+            continue
+        for error in assertion.get("errors", []):
+            if error.get("message"):
+                print(f"    => {error['message']}")
+                continue
+            section = error["type"]
+            if error["type"] == "flag":
+                section = "expectedToBeEnabled"
+            elif error["type"] == "variation":
+                section = "expectedVariation"
+            elif error["type"] == "variable":
+                section = "expectedVariables"
+            details = error.get("details") or {}
+            if details.get("childIndex") is not None:
+                section = f"children[{details['childIndex']}].{section}"
+            if error["type"] == "variable":
+                variable_key = details.get("variableKey")
+                print(f"    => {section}.{variable_key}:")
+                print(f"       => expected: {_stringify_value(error.get('expected'))}")
+                print(f"       => received: {_stringify_value(error.get('actual'))}")
+            else:
+                if error["type"] == "evaluation":
+                    if details.get("variableKey"):
+                        section = f"{section}.variables.{details['variableKey']}.{details['evaluationKey']}"
+                    elif details.get("evaluationType"):
+                        section = f"{section}.{details['evaluationType']}.{details['evaluationKey']}"
+                print(
+                    f'    => {section}: expected "{_stringify_value(error.get("expected"))}", received "{_stringify_value(error.get("actual"))}"'
+                )
+
+
 def _compare_jsonish(expected: Any, actual: Any) -> bool:
     return json.dumps(expected, sort_keys=True) == json.dumps(actual, sort_keys=True)
 
@@ -134,6 +186,11 @@ def run_test_project(project_directory_path: str, *, key_pattern: str | None = N
     features_by_key = {item["key"]: item for item in project.list_features()}
     segments_by_key = {item["key"]: item for item in project.list_segments()}
     datafile_cache: dict[Any, dict[str, Any]] = {}
+    start = time.perf_counter()
+    passed_tests_count = 0
+    failed_tests_count = 0
+    passed_assertions_count = 0
+    failed_assertions_count = 0
 
     environments = config.get("environments")
     if environments is False:
@@ -204,19 +261,24 @@ def run_test_project(project_directory_path: str, *, key_pattern: str | None = N
                 result = {"type": "segment", "key": segment_key, "notFound": True, "passed": False, "duration": 0, "assertions": []}
             else:
                 result = test_segment({"segment": segment_key, "conditions": segment_source["conditions"], "assertions": test["assertions"]}, {"verbose": verbose, "quiet": quiet})
-        if only_failures and result["passed"]:
-            continue
-        symbol = "✓" if result["passed"] else "✘"
-        print(f"{symbol} {result['type']} {result['key']} ({result['duration']}ms)")
+        if result["passed"]:
+            passed_tests_count += 1
+        else:
+            failed_tests_count += 1
         for assertion in result["assertions"]:
-            if assertion["passed"] and not verbose:
-                continue
-            prefix = "  ✓" if assertion["passed"] else "  ✘"
-            print(f"{prefix} {assertion['description']}")
-            for error in assertion.get("errors", []):
-                message = error.get("message") or f"expected {error.get('expected')} but received {error.get('actual')}"
-                print(f"    - {error['type']}: {message}")
+            if assertion["passed"]:
+                passed_assertions_count += 1
+            else:
+                failed_assertions_count += 1
+        if not (only_failures and result["passed"]):
+            _print_test_result(result, test["key"])
         passed = passed and result["passed"]
+    if not only_failures or not passed:
+        print("\n---")
+    print("")
+    print(f"Test specs: {passed_tests_count} passed, {failed_tests_count} failed")
+    print(f"Assertions: {passed_assertions_count} passed, {failed_assertions_count} failed")
+    print(f"Time:       {pretty_duration(time.perf_counter() - start)}")
     return passed
 
 
