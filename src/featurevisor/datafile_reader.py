@@ -14,6 +14,7 @@ class DatafileReader:
         self.logger = logger
         self.schema_version = datafile["schemaVersion"]
         self.revision = datafile["revision"]
+        self.featurevisor_version = datafile.get("featurevisorVersion")
         self.segments = datafile.get("segments", {})
         self.features = datafile.get("features", {})
         self.regex_cache: dict[str, re.Pattern[str]] = {}
@@ -23,6 +24,16 @@ class DatafileReader:
 
     def get_schema_version(self) -> str:
         return self.schema_version
+
+    def get_datafile(self) -> dict[str, Any]:
+        datafile = {
+            "schemaVersion": self.schema_version,
+            "revision": self.revision,
+            "featurevisorVersion": self.featurevisor_version,
+            "segments": self.segments,
+            "features": self.features,
+        }
+        return {key: value for key, value in datafile.items() if value is not None}
 
     def get_segment(self, segment_key: str) -> Segment | None:
         segment = self.segments.get(segment_key)
@@ -137,6 +148,7 @@ class DatafileReader:
 
     getRevision = get_revision
     getSchemaVersion = get_schema_version
+    getDatafile = get_datafile
     getSegment = get_segment
     getFeatureKeys = get_feature_keys
     getFeature = get_feature
@@ -151,4 +163,3 @@ class DatafileReader:
     getMatchedForce = get_matched_force
     parseConditionsIfStringified = parse_conditions_if_stringified
     parseSegmentsIfStringified = parse_segments_if_stringified
-

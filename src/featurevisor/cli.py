@@ -26,9 +26,9 @@ def build_parser() -> argparse.ArgumentParser:
     common.add_argument("--variable")
     common.add_argument("--n", type=int, default=1000)
     common.add_argument("--inflate", type=int, default=0)
-    common.add_argument("--with-scopes", dest="with_scopes", action="store_true")
-    common.add_argument("--with-tags", dest="with_tags", action="store_true")
-    common.add_argument("--schemaVersion")
+    common.add_argument("--with-scopes", "--withScopes", dest="with_scopes", action="store_true")
+    common.add_argument("--with-tags", "--withTags", dest="with_tags", action="store_true")
+    common.add_argument("--schemaVersion", "--schema-version", dest="schema_version")
     common.add_argument("--populateUuid", action="append", default=[])
     subparsers.add_parser("test", parents=[common])
     subparsers.add_parser("benchmark", parents=[common])
@@ -49,7 +49,7 @@ def main(argv: list[str] | None = None) -> int:
             quiet=args.quiet,
             show_datafile=args.showDatafile,
             only_failures=args.onlyFailures,
-            schema_version=args.schemaVersion,
+            schema_version=args.schema_version,
             inflate=args.inflate,
             with_scopes=args.with_scopes,
             with_tags=args.with_tags,
@@ -66,7 +66,6 @@ def main(argv: list[str] | None = None) -> int:
             n=args.n,
             variation=args.variation,
             variable=args.variable,
-            schema_version=args.schemaVersion,
             inflate=args.inflate,
             verbose=args.verbose,
             quiet=args.quiet,
@@ -81,7 +80,6 @@ def main(argv: list[str] | None = None) -> int:
             context=context,
             n=args.n,
             populate_uuid=args.populateUuid,
-            schema_version=args.schemaVersion,
             inflate=args.inflate,
             verbose=args.verbose,
             quiet=args.quiet,

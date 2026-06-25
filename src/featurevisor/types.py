@@ -14,7 +14,7 @@ BucketKey = str
 BucketValue = int
 
 LogLevel = Literal["fatal", "error", "warn", "info", "debug"]
-EventName = Literal["datafile_set", "context_set", "sticky_set"]
+EventName = Literal["datafile_set", "context_set", "sticky_set", "error"]
 
 
 class EvaluatedFeature(TypedDict, total=False):
@@ -99,8 +99,9 @@ class Segment(TypedDict, total=False):
 
 
 class DatafileContent(TypedDict):
-    schemaVersion: str
+    schema_version: str
     revision: str
+    featurevisorVersion: NotRequired[str]
     segments: dict[SegmentKey, Segment]
     features: dict[FeatureKey, Feature]
 
@@ -127,12 +128,24 @@ class Evaluation(TypedDict, total=False):
     variableOverrideIndex: int
 
 
-class Hook(TypedDict, total=False):
+class FeaturevisorDiagnostic(TypedDict, total=False):
+    level: LogLevel
+    code: str
+    message: str
+    module: str
+    moduleName: str
+    originalError: Exception
+    details: dict[str, Any]
+
+
+class FeaturevisorModule(TypedDict, total=False):
     name: str
     before: Callable[[dict[str, Any]], dict[str, Any]]
     bucketKey: Callable[[dict[str, Any]], BucketKey]
     bucketValue: Callable[[dict[str, Any]], BucketValue]
     after: Callable[[Evaluation, dict[str, Any]], Evaluation]
+    setup: Callable[[dict[str, Any]], None]
+    close: Callable[[], None]
 
 
 class TestResultAssertionError(TypedDict, total=False):
@@ -176,17 +189,14 @@ class CLIOptions(TypedDict, total=False):
     inflate: int
     with_scopes: bool
     with_tags: bool
-    schemaVersion: str
+    schema_version: str
     populateUuid: list[str]
 
 
 class ProjectConfig(TypedDict, total=False):
     environments: list[str] | bool
-    tags: list[str]
-    scopes: list[dict[str, Any]]
     datafilesDirectoryPath: str
     datafileNamePattern: str
     testsDirectoryPath: str
     featuresDirectoryPath: str
     segmentsDirectoryPath: str
-

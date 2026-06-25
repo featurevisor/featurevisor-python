@@ -40,14 +40,14 @@ class InstanceParityTests(unittest.TestCase):
                         },
                         "segments": {},
                     },
-                    "hooks": [{"name": "unit-test", "bucketKey": lambda options, captured=captured: captured.update(bucket=options["bucketKey"]) or options["bucketKey"]}],
+                    "modules": [{"name": "unit-test", "bucketKey": lambda options, captured=captured: captured.update(bucket=options["bucketKey"]) or options["bucketKey"]}],
                     "logLevel": "fatal",
                 }
             )
             self.assertEqual(sdk.getVariation("test", context), "control")
             self.assertEqual(captured["bucket"], expected_bucket)
 
-    def test_should_intercept_before_and_after_hooks(self) -> None:
+    def test_should_intercept_before_and_after_modules(self) -> None:
         before = {"called": False, "featureKey": "", "variableKey": None}
         sdk = createInstance(
             {
@@ -57,7 +57,7 @@ class InstanceParityTests(unittest.TestCase):
                     "features": {"test": {"key": "test", "bucketBy": "userId", "variations": [{"value": "control"}, {"value": "treatment"}], "traffic": [{"key": "1", "segments": "*", "percentage": 100000, "allocation": [{"variation": "control", "range": [0, 100000]}, {"variation": "treatment", "range": [0, 0]}]}]}},
                     "segments": {},
                 },
-                "hooks": [
+                "modules": [
                     {"name": "before", "before": lambda options: before.update(called=True, featureKey=options["featureKey"], variableKey=options.get("variableKey")) or options},
                     {"name": "after", "after": lambda evaluation, options: {**evaluation, "variationValue": "control_intercepted"}},
                 ],
@@ -120,7 +120,7 @@ class InstanceParityTests(unittest.TestCase):
         bucket = {"value": 10000}
         sdk = createInstance(
             {
-                "hooks": [{"name": "unit-test", "bucketValue": lambda options, bucket=bucket: bucket["value"]}],
+                "modules": [{"name": "unit-test", "bucketValue": lambda options, bucket=bucket: bucket["value"]}],
                 "datafile": {
                     "schemaVersion": "2",
                     "revision": "1.0",

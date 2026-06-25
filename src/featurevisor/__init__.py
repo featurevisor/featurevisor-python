@@ -3,10 +3,10 @@ from .child import FeaturevisorChildInstance
 from .conditions import condition_is_matched, get_value_from_context
 from .datafile_reader import DatafileReader
 from .emitter import Emitter
-from .evaluate import EvaluationReason, evaluate, evaluate_with_hooks
+from .evaluate import EvaluationReason, evaluate, evaluate_with_modules
 from .events import get_params_for_datafile_set_event, get_params_for_sticky_set_event
 from .helpers import get_value_by_type
-from .hooks import HooksManager
+from .modules import FeaturevisorModule, ModulesManager
 from .instance import FeaturevisorInstance, create_instance
 from .logger import Logger, create_logger, default_log_handler, loggerPrefix
 from .murmurhash import murmurhash_v3
@@ -26,14 +26,15 @@ __all__ = [
     "EvaluationReason",
     "FeaturevisorChildInstance",
     "FeaturevisorInstance",
-    "HooksManager",
+    "FeaturevisorModule",
+    "ModulesManager",
     "Logger",
     "condition_is_matched",
     "create_instance",
     "create_logger",
     "default_log_handler",
     "evaluate",
-    "evaluate_with_hooks",
+    "evaluate_with_modules",
     "get_bucket_key",
     "get_bucketed_number",
     "get_params_for_datafile_set_event",

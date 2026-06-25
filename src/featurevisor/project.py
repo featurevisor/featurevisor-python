@@ -42,29 +42,27 @@ class FeaturevisorProject:
     def list_features(self) -> list[dict[str, Any]]:
         return self.run_json("list", "--features", "--json")
 
-    def build_datafile_json(self, environment: str | None = None, schema_version: str | None = None, inflate: int | None = None) -> dict[str, Any]:
+    def list_targets(self) -> list[str]:
+        targets = self.run_json("list", "--targets", "--json")
+        if isinstance(targets, list):
+            return [
+                (target.get("name") or target.get("key")) if isinstance(target, dict) else target
+                for target in targets
+                if ((target.get("name") or target.get("key")) if isinstance(target, dict) else target)
+            ]
+        if isinstance(targets, dict):
+            return list(targets.keys())
+        return []
+
+    def build_datafile_json(self, environment: str | None = None, inflate: int | None = None, target: str | None = None) -> dict[str, Any]:
         args = ["build", "--json"]
         if environment:
             args.append(f"--environment={environment}")
-        if schema_version:
-            args.append(f"--schema-version={schema_version}")
         if inflate:
             args.append(f"--inflate={inflate}")
+        if target:
+            args.append(f"--target={target}")
         return self.run_json(*args)
-
-    def ensure_built(self, schema_version: str | None = None, inflate: int | None = None) -> None:
-        args = ["build"]
-        if schema_version:
-            args.append(f"--schema-version={schema_version}")
-        if inflate:
-            args.append(f"--inflate={inflate}")
-        self.run(*args)
-
-    def read_generated_datafile(self, config: dict[str, Any], *, environment: str | None, kind: str, value: str) -> dict[str, Any]:
-        datafiles_dir = pathlib.Path(config["datafilesDirectoryPath"])
-        base_dir = datafiles_dir / environment if environment else datafiles_dir
-        file_name = config.get("datafileNamePattern", "featurevisor-%s.json") % f"{kind}-{value}"
-        return json.loads((base_dir / file_name).read_text())
 
 
 def pretty_duration(seconds: float) -> str:
@@ -88,8 +86,7 @@ def pretty_duration(seconds: float) -> str:
     return " ".join(parts)
 
 
-def timed_build(project: FeaturevisorProject, *, environment: str, schema_version: str | None = None, inflate: int | None = None) -> tuple[dict[str, Any], float]:
+def timed_build(project: FeaturevisorProject, *, environment: str, inflate: int | None = None) -> tuple[dict[str, Any], float]:
     start = time.perf_counter()
-    datafile = project.build_datafile_json(environment=environment, schema_version=schema_version, inflate=inflate)
+    datafile = project.build_datafile_json(environment=environment, inflate=inflate)
     return datafile, time.perf_counter() - start
-

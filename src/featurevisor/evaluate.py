@@ -27,14 +27,10 @@ class EvaluationReason(StrEnum):
     ERROR = "error"
 
 
-def evaluate_with_hooks(options: dict[str, Any]) -> dict[str, Any]:
+def evaluate_with_modules(options: dict[str, Any]) -> dict[str, Any]:
     try:
-        hooks_manager = options["hooksManager"]
-        hooks = hooks_manager.get_all()
-        current_options = options
-        for hook in hooks:
-            if hook.get("before"):
-                current_options = hook["before"](current_options)
+        modules_manager = options["modulesManager"]
+        current_options = modules_manager.run_before_modules(options)
         evaluation = evaluate(current_options)
         if (
             current_options.get("defaultVariationValue") is not None
@@ -49,9 +45,7 @@ def evaluate_with_hooks(options: dict[str, Any]) -> dict[str, Any]:
             and evaluation.get("variableValue") is None
         ):
             evaluation["variableValue"] = current_options["defaultVariableValue"]
-        for hook in hooks:
-            if hook.get("after"):
-                evaluation = hook["after"](evaluation, current_options)
+        evaluation = modules_manager.run_after_modules(evaluation, current_options)
         return evaluation
     except Exception as exc:
         evaluation = {
@@ -89,7 +83,7 @@ def evaluate(options: dict[str, Any]) -> dict[str, Any]:
     logger = options["logger"]
     datafile_reader = options["datafileReader"]
     sticky = options.get("sticky")
-    hooks = options["hooksManager"].get_all()
+    modules_manager = options["modulesManager"]
 
     try:
         if type_ != "flag":
@@ -231,13 +225,13 @@ def evaluate(options: dict[str, Any]) -> dict[str, Any]:
                 return evaluation
 
         bucket_key = get_bucket_key(featureKey=feature_key, bucketBy=feature["bucketBy"], context=context, logger=logger)
-        for hook in hooks:
-            if hook.get("bucketKey"):
-                bucket_key = hook["bucketKey"]({"featureKey": feature_key, "context": context, "bucketBy": feature["bucketBy"], "bucketKey": bucket_key})
+        bucket_key = modules_manager.run_bucket_key_modules(
+            {"featureKey": feature_key, "context": context, "bucketBy": feature["bucketBy"], "bucketKey": bucket_key}
+        )
         bucket_value = get_bucketed_number(bucket_key)
-        for hook in hooks:
-            if hook.get("bucketValue"):
-                bucket_value = hook["bucketValue"]({"featureKey": feature_key, "bucketKey": bucket_key, "context": context, "bucketValue": bucket_value})
+        bucket_value = modules_manager.run_bucket_value_modules(
+            {"featureKey": feature_key, "bucketKey": bucket_key, "context": context, "bucketValue": bucket_value}
+        )
 
         matched_traffic = datafile_reader.get_matched_traffic(feature["traffic"], context)
         matched_allocation = datafile_reader.get_matched_allocation(matched_traffic, bucket_value) if type_ != "flag" and matched_traffic else None
@@ -451,4 +445,3 @@ def evaluate(options: dict[str, Any]) -> dict[str, Any]:
         evaluation = {"type": type_, "featureKey": feature_key, "variableKey": variable_key, "reason": EvaluationReason.ERROR, "error": exc}
         logger.error("error", evaluation)
         return evaluation
-

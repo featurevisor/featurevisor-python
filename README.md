@@ -4,7 +4,7 @@ This repository ports the latest Featurevisor [JavaScript SDK](https://featurevi
 
 The package name is `featurevisor`, and it targets Python 3.10+.
 
-This SDK is compatible with [Featurevisor](https://featurevisor.com/) v2.0 projects and above.
+This SDK is compatible with Featurevisor v3 projects and v2 datafiles.
 
 <!-- FEATUREVISOR_DOCS_BEGIN -->
 
@@ -171,6 +171,18 @@ f.set_datafile(datafile_content)
 f.set_datafile(json.dumps(datafile_content))
 ```
 
+By default, `set_datafile(datafile)` merges incoming content into the SDK's current datafile:
+
+- top-level metadata such as `schemaVersion`, `revision`, and `featurevisorVersion` comes from the incoming datafile
+- `segments` are merged, with incoming entries overriding existing ones
+- `features` are merged, with incoming entries overriding existing ones
+
+To fully replace the stored datafile, pass `True` as the second argument:
+
+```python
+f.set_datafile(datafile_content, True)
+```
+
 ## Logging
 
 Supported log levels:
@@ -199,22 +211,60 @@ The SDK emits:
 - `datafile_set`
 - `context_set`
 - `sticky_set`
+- `error`
 
 ```python
 unsubscribe = f.on("datafile_set", lambda details: print(details))
 unsubscribe()
 ```
 
-## Hooks
+`datafile_set` includes a `replaced` flag. The `error` event is emitted for diagnostics reported with `level` set to `error` or `fatal`.
 
-Hooks support:
+## Diagnostics
 
+Diagnostics provide structured SDK and module events for observability:
+
+```python
+f = create_instance({
+    "onDiagnostic": lambda diagnostic: print(diagnostic),
+})
+```
+
+If `onDiagnostic` is not provided, diagnostics are sent to the SDK logger.
+
+## Modules
+
+Modules can intercept evaluation and participate in SDK lifecycle:
+
+- `setup`
 - `before`
 - `bucketKey`
 - `bucketValue`
 - `after`
+- `close`
 
-They can be passed during initialization or added later with `add_hook`.
+```python
+my_module = {
+    "name": "my-module",
+    "setup": lambda api: api["onDiagnostic"](lambda diagnostic: print(diagnostic)),
+    "before": lambda options: {**options, "context": {**options["context"], "country": "nl"}},
+    "bucketKey": lambda options: options["bucketKey"],
+    "bucketValue": lambda options: options["bucketValue"],
+    "after": lambda evaluation, options: evaluation,
+    "close": lambda: None,
+}
+
+f = create_instance({
+    "modules": [my_module],
+})
+
+remove_module = f.add_module(my_module)
+remove_module()
+
+f.remove_module("my-module")
+```
+
+The module API passed to `setup` exposes `getRevision`, `onDiagnostic`, and `reportDiagnostic`.
 
 ## Child Instance
 
@@ -258,9 +308,9 @@ python -m featurevisor test --assertionPattern=variation
 python -m featurevisor test --onlyFailures
 python -m featurevisor test --showDatafile
 python -m featurevisor test --verbose
-python -m featurevisor test --with-tags
-python -m featurevisor test --with-scopes
 ```
+
+The Python test runner builds base datafiles and Target datafiles with `npx featurevisor build --json`. Assertions containing `target` are evaluated against the matching Target datafile.
 
 ### Benchmark
 
@@ -341,7 +391,14 @@ Run the example project integration directly:
 
 ```bash
 PYTHONPATH=src python3 -m featurevisor test \
-  --projectDirectoryPath=/path/to/featurevisor-project
+  --projectDirectoryPath=/Users/fahad/Projects/featurevisor/featurevisor/examples/example-1 \
+  --onlyFailures
+```
+
+Or use:
+
+```bash
+make test-example-1
 ```
 
 ## Releasing
