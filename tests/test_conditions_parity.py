@@ -96,6 +96,10 @@ class ConditionsParityTests(unittest.TestCase):
             ([{"or": [{"attribute": "browser_type", "operator": "equals", "value": "chrome"}, {"attribute": "browser_version", "operator": "equals", "value": "1.0"}]}], {"browser_version": "1.0"}, True),
             ([{"not": [{"attribute": "browser_type", "operator": "equals", "value": "chrome"}]}], {"browser_type": "firefox"}, True),
             ([{"not": [{"attribute": "browser_type", "operator": "equals", "value": "chrome"}, {"attribute": "browser_version", "operator": "equals", "value": "1.0"}]}], {"browser_type": "chrome", "browser_version": "1.0"}, False),
+            ([{"not": [{"attribute": "browser_type", "operator": "equals", "value": "chrome"}, {"attribute": "browser_version", "operator": "equals", "value": "1.0"}]}], {"browser_type": "chrome", "browser_version": "2.0"}, True),
+            ([{"not": [{"or": [{"attribute": "browser_type", "operator": "equals", "value": "chrome"}, {"attribute": "browser_type", "operator": "equals", "value": "firefox"}]}]}], {"browser_type": "chrome"}, False),
+            ([{"not": [{"or": [{"attribute": "browser_type", "operator": "equals", "value": "chrome"}, {"attribute": "browser_type", "operator": "equals", "value": "firefox"}]}]}], {"browser_type": "edge"}, True),
+            ([{"not": []}], {}, False),
             ([{"and": [{"attribute": "browser_type", "operator": "equals", "value": "chrome"}, {"or": [{"attribute": "browser_version", "operator": "equals", "value": "1.0"}, {"attribute": "browser_version", "operator": "equals", "value": "2.0"}]}]}], {"browser_type": "chrome", "browser_version": "1.0"}, True),
             (
                 [

@@ -80,7 +80,7 @@ class DatafileReader:
         if isinstance(conditions, dict) and isinstance(conditions.get("or"), list):
             return any(self.all_conditions_are_matched(item, context) for item in conditions["or"])
         if isinstance(conditions, dict) and isinstance(conditions.get("not"), list):
-            return all(not self.all_conditions_are_matched({"and": conditions["not"]}, context) for _ in conditions["not"])
+            return not self.all_conditions_are_matched({"and": conditions["not"]}, context)
         if isinstance(conditions, list):
             return all(self.all_conditions_are_matched(item, context) for item in conditions)
         return False
@@ -99,7 +99,7 @@ class DatafileReader:
         if isinstance(group_segments, dict) and isinstance(group_segments.get("or"), list):
             return any(self.all_segments_are_matched(item, context) for item in group_segments["or"])
         if isinstance(group_segments, dict) and isinstance(group_segments.get("not"), list):
-            return all(not self.all_segments_are_matched(item, context) for item in group_segments["not"])
+            return not self.all_segments_are_matched({"and": group_segments["not"]}, context)
         if isinstance(group_segments, list):
             return all(self.all_segments_are_matched(item, context) for item in group_segments)
         return False

@@ -103,9 +103,9 @@ class ModulesManager:
         self.modules = kept
 
         for module in removed:
-            module.call_close()
             if self.clear_module_diagnostic_subscriptions:
                 self.clear_module_diagnostic_subscriptions(module)
+            self._close_module(module)
 
     def get_all(self) -> list[FeaturevisorModule]:
         return list(self.modules)
@@ -136,10 +136,25 @@ class ModulesManager:
 
     def close_all(self) -> None:
         for module in self.modules:
-            module.call_close()
             if self.clear_module_diagnostic_subscriptions:
                 self.clear_module_diagnostic_subscriptions(module)
+            self._close_module(module)
         self.modules = []
+
+    def _close_module(self, module: FeaturevisorModule) -> None:
+        try:
+            module.call_close()
+        except Exception as exc:
+            self._report(
+                {
+                    "level": "error",
+                    "code": "module_close_error",
+                    "message": "Module close failed",
+                    "moduleName": module.name,
+                    "originalError": exc,
+                },
+                None,
+            )
 
     def _report(self, diagnostic: dict[str, Any], module: FeaturevisorModule | None = None) -> None:
         if self.report_diagnostic:

@@ -1,10 +1,57 @@
-# featurevisor-python
+# Featurevisor Python SDK <!-- omit in toc -->
 
 This repository ports the latest Featurevisor [JavaScript SDK](https://featurevisor.com/docs/sdks/javascript/) to Python.
 
 The package name is `featurevisor`, and it targets Python 3.10+.
 
 This SDK is compatible with Featurevisor v3 projects and v2 datafiles.
+
+## Table of contents <!-- omit in toc -->
+
+- [Installation](#installation)
+- [Initialization](#initialization)
+- [Evaluation types](#evaluation-types)
+- [Context](#context)
+  - [Setting initial context](#setting-initial-context)
+  - [Setting after initialization](#setting-after-initialization)
+  - [Replacing existing context](#replacing-existing-context)
+  - [Manually passing context](#manually-passing-context)
+- [Check if enabled](#check-if-enabled)
+- [Getting variation](#getting-variation)
+- [Getting variables](#getting-variables)
+  - [Type specific methods](#type-specific-methods)
+- [Getting all evaluations](#getting-all-evaluations)
+- [Sticky](#sticky)
+  - [Initialize with sticky](#initialize-with-sticky)
+  - [Set sticky afterwards](#set-sticky-afterwards)
+- [Setting datafile](#setting-datafile)
+  - [Merging by default](#merging-by-default)
+  - [Replacing](#replacing)
+  - [Loading datafiles on demand](#loading-datafiles-on-demand)
+  - [Updating datafile](#updating-datafile)
+  - [Interval-based update](#interval-based-update)
+- [Logging](#logging)
+  - [Levels](#levels)
+  - [Customizing levels](#customizing-levels)
+  - [Handler](#handler)
+- [Events](#events)
+  - [`datafile_set`](#datafile_set)
+  - [`context_set`](#context_set)
+  - [`sticky_set`](#sticky_set)
+  - [`error`](#error)
+- [Diagnostics](#diagnostics)
+- [Modules](#modules)
+  - [Defining a module](#defining-a-module)
+  - [Registering modules](#registering-modules)
+- [Child instance](#child-instance)
+- [Close](#close)
+- [CLI usage](#cli-usage)
+  - [Test](#test)
+  - [Benchmark](#benchmark)
+  - [Assess distribution](#assess-distribution)
+- [Development](#development)
+- [Releasing](#releasing)
+- [License](#license)
 
 <!-- FEATUREVISOR_DOCS_BEGIN -->
 
@@ -34,7 +81,7 @@ f = create_instance({
 })
 ```
 
-## Evaluation Types
+## Evaluation types
 
 We can evaluate 3 types of values against a particular [feature](https://featurevisor.com/docs/features/):
 
@@ -53,6 +100,8 @@ context = {
 }
 ```
 
+### Setting initial context
+
 You can provide context at initialization:
 
 ```python
@@ -64,6 +113,8 @@ f = create_instance({
 })
 ```
 
+### Setting after initialization
+
 You can merge more context later:
 
 ```python
@@ -71,6 +122,8 @@ f.set_context({
     "userId": "234",
 })
 ```
+
+### Replacing existing context
 
 Or replace the existing context:
 
@@ -86,6 +139,8 @@ f.set_context(
 )
 ```
 
+### Manually passing context
+
 You can also pass additional per-evaluation context:
 
 ```python
@@ -94,14 +149,14 @@ variation = f.get_variation("my_feature", {"country": "nl"})
 variable_value = f.get_variable("my_feature", "my_variable", {"country": "nl"})
 ```
 
-## Check If Enabled
+## Check if enabled
 
 ```python
 if f.is_enabled("my_feature"):
     pass
 ```
 
-## Getting Variation
+## Getting variation
 
 ```python
 variation = f.get_variation("my_feature")
@@ -110,11 +165,13 @@ if variation == "treatment":
     pass
 ```
 
-## Getting Variables
+## Getting variables
 
 ```python
 bg_color = f.get_variable("my_feature", "bgColor")
 ```
+
+### Type specific methods
 
 Typed convenience methods are also available:
 
@@ -128,13 +185,15 @@ f.get_variable_object(feature_key, variable_key, context={})
 f.get_variable_json(feature_key, variable_key, context={})
 ```
 
-## Getting All Evaluations
+## Getting all evaluations
 
 ```python
 all_evaluations = f.get_all_evaluations()
 ```
 
 ## Sticky
+
+### Initialize with sticky
 
 You can pin feature evaluations with sticky values:
 
@@ -152,6 +211,8 @@ f = create_instance({
 })
 ```
 
+### Set sticky afterwards
+
 Or update them later:
 
 ```python
@@ -162,14 +223,16 @@ f.set_sticky({
 })
 ```
 
-## Setting Datafile
+## Setting datafile
 
-The SDK accepts either parsed JSON content or a JSON string:
+You may initialize the SDK without passing `datafile`, and set it later on. The SDK accepts either parsed JSON content or a JSON string:
 
 ```python
 f.set_datafile(datafile_content)
 f.set_datafile(json.dumps(datafile_content))
 ```
+
+### Merging by default
 
 By default, `set_datafile(datafile)` merges incoming content into the SDK's current datafile:
 
@@ -177,13 +240,71 @@ By default, `set_datafile(datafile)` merges incoming content into the SDK's curr
 - `segments` are merged, with incoming entries overriding existing ones
 - `features` are merged, with incoming entries overriding existing ones
 
+This means you can call `set_datafile` more than once with different datafiles, and the SDK instance accumulates their features and segments together. This is what makes [loading datafiles on demand](#loading-datafiles-on-demand) possible.
+
+### Replacing
+
 To fully replace the stored datafile, pass `True` as the second argument:
 
 ```python
 f.set_datafile(datafile_content, True)
 ```
 
+### Loading datafiles on demand
+
+Because merging is the default, a single SDK instance can start with a small datafile and load more datafiles later as your application needs them, instead of downloading every feature upfront.
+
+This pairs well with [targets](https://featurevisor.com/docs/targets/), where each target produces a smaller datafile for a specific part of your application. You can load the datafile for the current part, and load others only when the user reaches them:
+
+```python
+from urllib.request import urlopen
+import json
+
+from featurevisor import create_instance
+
+f = create_instance({})
+
+def load_datafile(target):
+    url = f"https://cdn.yoursite.com/production/featurevisor-{target}.json"
+    with urlopen(url) as response:
+        datafile = json.load(response)
+
+    # merges into whatever was loaded before
+    f.set_datafile(datafile)
+
+load_datafile("products")
+
+# later, when the user reaches checkout
+load_datafile("checkout")
+```
+
+### Updating datafile
+
+You can set the datafile as many times as you want in your application, which will emit a [`datafile_set`](#datafile_set) event that you can listen and react to accordingly.
+
+### Interval-based update
+
+Here's a minimal interval-style example:
+
+```python
+import json
+import threading
+from urllib.request import urlopen
+
+def update_datafile():
+    with urlopen(datafile_url) as response:
+        f.set_datafile(json.load(response))
+
+    threading.Timer(5 * 60, update_datafile).start()
+
+update_datafile()
+```
+
 ## Logging
+
+By default, Featurevisor SDKs report diagnostics/logs for `info` level and above.
+
+### Levels
 
 Supported log levels:
 
@@ -192,6 +313,8 @@ Supported log levels:
 - `warn`
 - `info`
 - `debug`
+
+### Customizing levels
 
 ```python
 from featurevisor import create_instance
@@ -202,23 +325,58 @@ f = create_instance({
 })
 ```
 
+You can also set the log level from the SDK instance afterwards:
+
+```python
+f.set_log_level("debug")
+```
+
+### Handler
+
 You can also provide a custom logger handler via `create_logger`.
 
 ## Events
 
-The SDK emits:
+Featurevisor SDK implements a simple event emitter that allows you to listen to events that happen in the runtime.
 
-- `datafile_set`
-- `context_set`
-- `sticky_set`
-- `error`
+### `datafile_set`
 
 ```python
-unsubscribe = f.on("datafile_set", lambda details: print(details))
+def handle_datafile_set(event):
+    revision = event["revision"]
+    previous_revision = event["previousRevision"]
+    revision_changed = event["revisionChanged"]
+    features = event["features"]
+    replaced = event["replaced"]
+
+unsubscribe = f.on("datafile_set", handle_datafile_set)
 unsubscribe()
 ```
 
-`datafile_set` includes a `replaced` flag. The `error` event is emitted for diagnostics reported with `level` set to `error` or `fatal`.
+The `features` list will contain keys of features that have either been added, updated, or removed compared to the previous datafile content.
+
+### `context_set`
+
+```python
+unsubscribe = f.on("context_set", lambda event: print(event["context"]))
+unsubscribe()
+```
+
+### `sticky_set`
+
+```python
+unsubscribe = f.on("sticky_set", lambda event: print(event["features"]))
+unsubscribe()
+```
+
+### `error`
+
+```python
+unsubscribe = f.on("error", lambda diagnostic: print(diagnostic["message"]))
+unsubscribe()
+```
+
+The `error` event is emitted for diagnostics reported with `level` set to `error` or `fatal`.
 
 ## Diagnostics
 
@@ -243,6 +401,8 @@ Modules can intercept evaluation and participate in SDK lifecycle:
 - `after`
 - `close`
 
+### Defining a module
+
 ```python
 my_module = {
     "name": "my-module",
@@ -253,6 +413,15 @@ my_module = {
     "after": lambda evaluation, options: evaluation,
     "close": lambda: None,
 }
+```
+
+The module API passed to `setup` exposes `getRevision`, `onDiagnostic`, and `reportDiagnostic`.
+
+### Registering modules
+
+Modules can be registered at initialization or afterwards:
+
+```python
 
 f = create_instance({
     "modules": [my_module],
@@ -264,9 +433,7 @@ remove_module()
 f.remove_module("my-module")
 ```
 
-The module API passed to `setup` exposes `getRevision`, `onDiagnostic`, and `reportDiagnostic`.
-
-## Child Instance
+## Child instance
 
 ```python
 child = f.spawn({"country": "de"})
@@ -279,7 +446,7 @@ child.is_enabled("my_feature")
 f.close()
 ```
 
-## CLI Usage
+## CLI usage
 
 The Python package also exposes a CLI:
 
@@ -347,7 +514,7 @@ python -m featurevisor benchmark \
   --context='{"userId":"123"}'
 ```
 
-### Assess Distribution
+### Assess distribution
 
 Inspect enabled/disabled and variation distribution over repeated evaluations:
 

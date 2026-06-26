@@ -153,6 +153,72 @@ class SDKTests(unittest.TestCase):
         instance.close()
         self.assertEqual(closed, ["lifecycle"])
 
+    def test_add_module_unsubscribe_closes_module_once(self) -> None:
+        closed = []
+        instance = create_instance({"logLevel": "fatal"})
+
+        unsubscribe = instance.add_module({"name": "dynamic", "close": lambda: closed.append("dynamic")})
+
+        unsubscribe()
+        unsubscribe()
+
+        self.assertEqual(closed, ["dynamic"])
+
+    def test_module_close_errors_are_reported_and_do_not_stop_cleanup(self) -> None:
+        diagnostics = []
+        errors = []
+        closed = []
+
+        def fail_close() -> None:
+            closed.append("first")
+            raise RuntimeError("first close failed")
+
+        instance = create_instance(
+            {
+                "logLevel": "error",
+                "onDiagnostic": lambda diagnostic: diagnostics.append(diagnostic),
+                "modules": [
+                    {"name": "first", "close": fail_close},
+                    {"name": "second", "close": lambda: closed.append("second")},
+                ],
+            }
+        )
+        instance.on("error", lambda event: errors.append(event))
+
+        instance.close()
+
+        self.assertEqual(closed, ["first", "second"])
+        self.assertTrue(
+            any(
+                diagnostic.get("code") == "module_close_error"
+                and diagnostic.get("moduleName") == "first"
+                and diagnostic.get("level") == "error"
+                and isinstance(diagnostic.get("originalError"), RuntimeError)
+                for diagnostic in diagnostics
+            )
+        )
+        self.assertTrue(any(event.get("code") == "module_close_error" and event.get("moduleName") == "first" for event in errors))
+
+    def test_module_unsubscribe_reports_close_errors_once(self) -> None:
+        diagnostics = []
+        instance = create_instance({"logLevel": "error", "onDiagnostic": lambda diagnostic: diagnostics.append(diagnostic)})
+
+        def fail_close() -> None:
+            raise RuntimeError("dynamic close failed")
+
+        unsubscribe = instance.add_module({"name": "dynamic", "close": fail_close})
+        unsubscribe()
+        unsubscribe()
+
+        self.assertEqual(
+            1,
+            sum(
+                1
+                for diagnostic in diagnostics
+                if diagnostic.get("code") == "module_close_error" and diagnostic.get("moduleName") == "dynamic"
+            ),
+        )
+
     def test_module_diagnostic_subscribe_report_and_remove_cleanup(self) -> None:
         instance_diagnostics = []
         listener_diagnostics = []
@@ -222,6 +288,26 @@ class SDKTests(unittest.TestCase):
         self.assertEqual(len(emitter.listeners["datafile_set"]), 0)
         emitter.clear_all()
         self.assertEqual(dict(emitter.listeners), {})
+
+    def test_emitter_uses_listener_snapshot(self) -> None:
+        emitter = Emitter()
+        calls = []
+        unsubscribe_second = None
+
+        def first(_details: dict) -> None:
+            calls.append("first")
+            unsubscribe_second()
+
+        def second(_details: dict) -> None:
+            calls.append("second")
+
+        emitter.on("sticky_set", first)
+        unsubscribe_second = emitter.on("sticky_set", second)
+
+        emitter.trigger("sticky_set")
+        emitter.trigger("sticky_set")
+
+        self.assertEqual(calls, ["first", "second", "first"])
 
     def test_logger_handler_and_filtering(self) -> None:
         calls = []

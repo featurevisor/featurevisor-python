@@ -60,6 +60,9 @@ class DatafileReaderParityTests(unittest.TestCase):
             "germanMobileUsers": [{"and": ["mobileUsers", "germany"]}],
             "germanNonMobileUsers": [{"and": ["germany", {"not": ["mobileUsers"]}]}],
             "notVersion5.5": [{"not": ["version_5.5"]}],
+            "notDutchMobileUsers": {"not": ["mobileUsers", "netherlands"]},
+            "notMobileOrDesktopUsers": {"not": [{"or": ["mobileUsers", "desktopUsers"]}]},
+            "emptyNot": {"not": []},
         }
         datafile = {
             "schemaVersion": "2",
@@ -88,6 +91,11 @@ class DatafileReaderParityTests(unittest.TestCase):
             ("germanNonMobileUsers", {"country": "de", "deviceType": "desktop"}, True),
             ("notVersion5.5", {"version": "5.5"}, False),
             ("notVersion5.5", {"version": 5.6}, True),
+            ("notDutchMobileUsers", {"country": "nl", "deviceType": "mobile"}, False),
+            ("notDutchMobileUsers", {"country": "nl", "deviceType": "desktop"}, True),
+            ("notMobileOrDesktopUsers", {"deviceType": "mobile"}, False),
+            ("notMobileOrDesktopUsers", {"deviceType": "tv"}, True),
+            ("emptyNot", {}, False),
         ]
         for key, context, expected in matches:
             with self.subTest(key=key, context=context):
