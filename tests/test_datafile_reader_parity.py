@@ -5,14 +5,14 @@ import unittest
 
 sys.path.insert(0, "src")
 
-from featurevisor import createLogger
 from featurevisor.datafile_reader import _DatafileReader
+from featurevisor.logger import create_logger
 
 
 class DatafileReaderParityTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
-        cls.logger = createLogger()
+        cls.logger = create_logger()
 
     def test_should_be_a_function(self) -> None:
         self.assertTrue(callable(_DatafileReader))

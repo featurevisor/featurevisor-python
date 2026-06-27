@@ -7,12 +7,13 @@ from unittest.mock import patch
 
 sys.path.insert(0, "src")
 
-from featurevisor import Emitter, FeaturevisorChildInstance, create_instance
+from featurevisor import FeaturevisorChildInstance, create_instance
 from featurevisor.bucketer import MAX_BUCKETED_NUMBER, get_bucket_key, get_bucketed_number
 from featurevisor.compare_versions import compare_versions
 from featurevisor.conditions import condition_is_matched
 from featurevisor.datafile_reader import _DatafileReader
 from featurevisor.events import get_params_for_datafile_set_event, get_params_for_sticky_set_event
+from featurevisor.emitter import Emitter
 from featurevisor.logger import create_logger
 
 

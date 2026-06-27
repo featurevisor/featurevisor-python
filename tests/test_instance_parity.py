@@ -6,12 +6,30 @@ import unittest
 
 sys.path.insert(0, "src")
 
-from featurevisor import createInstance, createLogger
-
+import featurevisor
+from featurevisor import createInstance
+from featurevisor.logger import create_logger
 
 class InstanceParityTests(unittest.TestCase):
     def test_should_be_a_function(self) -> None:
         self.assertTrue(callable(createInstance))
+
+    def test_root_public_surface_is_narrow(self) -> None:
+        self.assertEqual(
+            set(featurevisor.__all__),
+            {
+                "Featurevisor",
+                "FeaturevisorChildInstance",
+                "FeaturevisorInstance",
+                "FeaturevisorModule",
+                "ModulesManager",
+                "Logger",
+                "create_instance",
+                "createInstance",
+            },
+        )
+        self.assertFalse(hasattr(featurevisor, "DatafileReader"))
+        self.assertFalse(hasattr(featurevisor, "createLogger"))
 
     def test_should_create_instance_with_datafile_content(self) -> None:
         sdk = createInstance({"datafile": {"schemaVersion": "2", "revision": "1.0", "features": {}, "segments": {}}})
@@ -107,7 +125,7 @@ class InstanceParityTests(unittest.TestCase):
                     },
                     "segments": {"netherlands": {"key": "netherlands", "conditions": '[{"attribute":"country","operator":"equals","value":"nl"}]'}},
                 },
-                "logger": createLogger({"handler": lambda level, message, details=None: logger_calls.append((level, message))}),
+                "logger": create_logger({"handler": lambda level, message, details=None: logger_calls.append((level, message))}),
             }
         )
         self.assertTrue(sdk.isEnabled("myKey"))

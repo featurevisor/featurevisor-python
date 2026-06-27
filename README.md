@@ -335,6 +335,18 @@ f.set_log_level("debug")
 
 You can also provide a custom logger handler via `create_logger`.
 
+## Diagnostics
+
+Diagnostics provide structured SDK and module events for observability:
+
+```python
+f = create_instance({
+    "onDiagnostic": lambda diagnostic: print(diagnostic),
+})
+```
+
+If `onDiagnostic` is not provided, diagnostics are sent to the SDK logger.
+
 ## Events
 
 Featurevisor SDK implements a simple event emitter that allows you to listen to events that happen in the runtime.
@@ -378,17 +390,38 @@ unsubscribe()
 
 The `error` event is emitted for diagnostics reported with `level` set to `error` or `fatal`.
 
-## Diagnostics
+## Evaluation details
 
-Diagnostics provide structured SDK and module events for observability:
+Besides logging with debug level enabled, you can also get more details about how feature variations and variables are evaluated at runtime against a given context:
 
 ```python
-f = create_instance({
-    "onDiagnostic": lambda diagnostic: print(diagnostic),
-})
+# flag
+evaluation = f.evaluate_flag(feature_key, context={})
+
+# variation
+evaluation = f.evaluate_variation(feature_key, context={})
+
+# variable
+evaluation = f.evaluate_variable(feature_key, variable_key, context={})
 ```
 
-If `onDiagnostic` is not provided, diagnostics are sent to the SDK logger.
+The returned object will always contain the following properties:
+
+- `featureKey`: the feature key
+- `reason`: the reason how the value was evaluated
+
+And optionally these properties depending on whether you are evaluating a feature variation or a variable:
+
+- `bucketValue`: the bucket value between 0 and 100,000
+- `ruleKey`: the rule key
+- `error`: the error object
+- `enabled`: if feature itself is enabled or not
+- `variation`: the variation object
+- `variationValue`: the variation value
+- `variableKey`: the variable key
+- `variableValue`: the variable value
+- `variableSchema`: the variable schema
+- `variableOverrideIndex`: index of matched variable override when applicable
 
 ## Modules
 
