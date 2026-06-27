@@ -11,7 +11,7 @@ from featurevisor import Emitter, FeaturevisorChildInstance, create_instance
 from featurevisor.bucketer import MAX_BUCKETED_NUMBER, get_bucket_key, get_bucketed_number
 from featurevisor.compare_versions import compare_versions
 from featurevisor.conditions import condition_is_matched
-from featurevisor.datafile_reader import DatafileReader
+from featurevisor.datafile_reader import _DatafileReader
 from featurevisor.events import get_params_for_datafile_set_event, get_params_for_sticky_set_event
 from featurevisor.logger import create_logger
 
@@ -253,7 +253,7 @@ class SDKTests(unittest.TestCase):
         self.assertEqual(listener_closed, [True])
 
     def test_datafile_reader_parses_stringified_conditions(self) -> None:
-        reader = DatafileReader(
+        reader = _DatafileReader(
             datafile={
                 "schemaVersion": "2",
                 "revision": "1",
@@ -271,8 +271,8 @@ class SDKTests(unittest.TestCase):
             {"features": ["feature1", "feature2"], "replaced": True},
         )
         logger = create_logger({"level": "fatal"})
-        previous = DatafileReader(datafile={"schemaVersion": "2", "revision": "1", "segments": {}, "features": {"feature1": {"bucketBy": "userId", "hash": "hash1", "traffic": []}}}, logger=logger)
-        current = DatafileReader(datafile={"schemaVersion": "2", "revision": "2", "segments": {}, "features": {"feature1": {"bucketBy": "userId", "hash": "hash2", "traffic": []}, "feature2": {"bucketBy": "userId", "hash": "hash3", "traffic": []}}}, logger=logger)
+        previous = _DatafileReader(datafile={"schemaVersion": "2", "revision": "1", "segments": {}, "features": {"feature1": {"bucketBy": "userId", "hash": "hash1", "traffic": []}}}, logger=logger)
+        current = _DatafileReader(datafile={"schemaVersion": "2", "revision": "2", "segments": {}, "features": {"feature1": {"bucketBy": "userId", "hash": "hash2", "traffic": []}, "feature2": {"bucketBy": "userId", "hash": "hash3", "traffic": []}}}, logger=logger)
         self.assertEqual(
             get_params_for_datafile_set_event(previous, current),
             {"revision": "2", "previousRevision": "1", "revisionChanged": True, "features": ["feature1", "feature2"], "replaced": False},

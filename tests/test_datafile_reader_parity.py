@@ -6,7 +6,7 @@ import unittest
 sys.path.insert(0, "src")
 
 from featurevisor import createLogger
-from featurevisor.datafile_reader import DatafileReader
+from featurevisor.datafile_reader import _DatafileReader
 
 
 class DatafileReaderParityTests(unittest.TestCase):
@@ -15,7 +15,7 @@ class DatafileReaderParityTests(unittest.TestCase):
         cls.logger = createLogger()
 
     def test_should_be_a_function(self) -> None:
-        self.assertTrue(callable(DatafileReader))
+        self.assertTrue(callable(_DatafileReader))
 
     def test_v2_datafile_schema_should_return_requested_entities(self) -> None:
         datafile_json = {
@@ -35,7 +35,7 @@ class DatafileReaderParityTests(unittest.TestCase):
                 "testWithNoVariations": {"key": "testWithNoVariations", "bucketBy": "userId", "traffic": [{"key": "1", "segments": "*", "percentage": 100000}]},
             },
         }
-        reader = DatafileReader(datafile=datafile_json, logger=self.logger)
+        reader = _DatafileReader(datafile=datafile_json, logger=self.logger)
         self.assertEqual(reader.getRevision(), "1")
         self.assertEqual(reader.getSchemaVersion(), "2")
         self.assertEqual(reader.getSegment("netherlands"), datafile_json["segments"]["netherlands"])
@@ -79,7 +79,7 @@ class DatafileReaderParityTests(unittest.TestCase):
                 "version_5.5": {"key": "version_5.5", "conditions": [{"or": [{"attribute": "version", "operator": "equals", "value": "5.5"}, {"attribute": "version", "operator": "equals", "value": 5.5}]}]},
             },
         }
-        reader = DatafileReader(datafile=datafile, logger=self.logger)
+        reader = _DatafileReader(datafile=datafile, logger=self.logger)
         matches = [
             ("*", {}, True),
             ("*", {"foo": "foo"}, True),

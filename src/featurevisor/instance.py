@@ -5,7 +5,7 @@ import uuid
 from typing import Any
 
 from .child import FeaturevisorChildInstance
-from .datafile_reader import DatafileReader
+from .datafile_reader import _DatafileReader
 from .emitter import Emitter
 from .evaluate import evaluate_with_modules
 from .events import get_params_for_datafile_set_event, get_params_for_sticky_set_event
@@ -26,7 +26,7 @@ class FeaturevisorInstance:
         self.sticky = options.get("sticky")
         self.closed = False
         self.module_diagnostic_subscriptions: list[dict[str, Any]] = []
-        self.datafile_reader = DatafileReader(datafile=empty_datafile, logger=self.logger)
+        self.datafile_reader = _DatafileReader(datafile=empty_datafile, logger=self.logger)
         self.modules_manager = ModulesManager(
             modules=options.get("modules") or [],
             report_diagnostic=self.report_diagnostic,
@@ -55,7 +55,7 @@ class FeaturevisorInstance:
         try:
             parsed = json.loads(datafile) if isinstance(datafile, str) else datafile
             next_datafile = parsed if replace else self._merge_datafiles(self.datafile_reader.get_datafile(), parsed)
-            new_reader = DatafileReader(datafile=next_datafile, logger=self.logger)
+            new_reader = _DatafileReader(datafile=next_datafile, logger=self.logger)
             details = get_params_for_datafile_set_event(self.datafile_reader, new_reader, replace)
             self.datafile_reader = new_reader
             self.logger.info("datafile set", details)

@@ -9,7 +9,7 @@ from .logger import Logger
 from .types import Context, DatafileContent, Feature, Force, Segment, Traffic
 
 
-class DatafileReader:
+class _DatafileReader:
     def __init__(self, *, datafile: DatafileContent, logger: Logger) -> None:
         self.logger = logger
         self.schema_version = datafile["schemaVersion"]

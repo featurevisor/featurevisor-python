@@ -5,7 +5,7 @@ import time
 import uuid
 from typing import Any
 
-from .datafile_reader import DatafileReader
+from .datafile_reader import _DatafileReader
 from .instance import create_instance
 from .logger import create_logger
 from .project import FeaturevisorProject, pretty_duration, timed_build
@@ -161,7 +161,7 @@ def _assert_feature(sdk, feature_key: str, assertion: dict[str, Any], datafile: 
 def test_segment(segment: dict[str, Any], assertion_options: dict[str, Any] | None = None) -> dict[str, Any]:
     options = assertion_options or {}
     logger = create_logger({"level": _log_level(options.get("verbose", False), options.get("quiet", False))})
-    reader = DatafileReader(datafile={"schemaVersion": "2", "revision": "tester", "segments": {}, "features": {}}, logger=logger)
+    reader = _DatafileReader(datafile={"schemaVersion": "2", "revision": "tester", "segments": {}, "features": {}}, logger=logger)
     result = {"type": "segment", "key": segment["segment"], "notFound": False, "passed": True, "duration": 0, "assertions": []}
     start = time.perf_counter()
     for assertion in segment["assertions"]:
