@@ -62,7 +62,7 @@ class FeaturevisorInstance:
             self.emitter.trigger("datafile_set", details)
             self.report_diagnostic({"level": "info", "code": "datafile_set", "message": "datafile set", "details": details})
         except Exception as exc:
-            self.report_diagnostic({"level": "error", "code": "invalid_datafile", "message": "could not parse datafile", "originalError": exc})
+            self.report_diagnostic({"level": "error", "code": "invalid_datafile", "message": "Could not parse datafile", "originalError": exc})
 
     def set_sticky(self, sticky: dict[str, Any], replace: bool = False) -> None:
         if self.closed:

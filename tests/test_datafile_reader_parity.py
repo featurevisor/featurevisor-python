@@ -5,7 +5,8 @@ import unittest
 
 sys.path.insert(0, "src")
 
-from featurevisor import DatafileReader, createLogger
+from featurevisor import createLogger
+from featurevisor.datafile_reader import DatafileReader
 
 
 class DatafileReaderParityTests(unittest.TestCase):

@@ -1,7 +1,6 @@
 from .bucketer import MAX_BUCKETED_NUMBER, get_bucket_key, get_bucketed_number
 from .child import FeaturevisorChildInstance
 from .conditions import condition_is_matched, get_value_from_context
-from .datafile_reader import DatafileReader
 from .emitter import Emitter
 from .evaluate import EvaluationReason, evaluate, evaluate_with_modules
 from .events import get_params_for_datafile_set_event, get_params_for_sticky_set_event
@@ -21,7 +20,6 @@ getValueFromContext = get_value_from_context
 
 __all__ = [
     "MAX_BUCKETED_NUMBER",
-    "DatafileReader",
     "Emitter",
     "EvaluationReason",
     "FeaturevisorChildInstance",
