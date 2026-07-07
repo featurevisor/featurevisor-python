@@ -275,16 +275,24 @@ def run_benchmark(project_directory_path: str, *, environment: str, feature: str
     level = _log_level(verbose, quiet)
     instance = create_instance({"datafile": datafile, "logLevel": level})
     context = context or {}
-    start = time.perf_counter()
+    total_duration_ns = 0
+    min_duration_ns: int | None = None
+    max_duration_ns = 0
     value = None
     for _ in range(n):
+        evaluation_start = time.perf_counter_ns()
         if variation:
             value = instance.get_variation(feature, context)
         elif variable:
             value = instance.get_variable(feature, variable, context)
         else:
             value = instance.is_enabled(feature, context)
-    duration = time.perf_counter() - start
+        evaluation_duration_ns = time.perf_counter_ns() - evaluation_start
+        total_duration_ns += evaluation_duration_ns
+        min_duration_ns = evaluation_duration_ns if min_duration_ns is None else min(min_duration_ns, evaluation_duration_ns)
+        max_duration_ns = max(max_duration_ns, evaluation_duration_ns)
+    duration = total_duration_ns / 1_000_000_000
+    average_duration_ns = total_duration_ns / n if n else 0
     print("")
     print(f'Running benchmark for feature "{feature}"...')
     print("")
@@ -293,7 +301,9 @@ def run_benchmark(project_directory_path: str, *, environment: str, feature: str
     print(f"Against context: {json.dumps(context)}")
     print(f"Evaluated value : {json.dumps(value)}")
     print(f"Total duration  : {pretty_duration(duration)}")
-    print(f"Average duration: {pretty_duration(duration / n)}")
+    print(f"Minimum duration: {(min_duration_ns or 0) / 1_000_000:.6f}ms")
+    print(f"Average duration: {average_duration_ns / 1_000_000:.6f}ms")
+    print(f"Maximum duration: {max_duration_ns / 1_000_000:.6f}ms")
     return 0
 
 
