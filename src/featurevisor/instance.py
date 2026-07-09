@@ -58,9 +58,8 @@ class FeaturevisorInstance:
             new_reader = _DatafileReader(datafile=next_datafile, logger=self.logger)
             details = get_params_for_datafile_set_event(self.datafile_reader, new_reader, replace)
             self.datafile_reader = new_reader
-            self.logger.info("datafile set", details)
             self.emitter.trigger("datafile_set", details)
-            self.report_diagnostic({"level": "info", "code": "datafile_set", "message": "datafile set", "details": details})
+            self.report_diagnostic({"level": "info", "code": "datafile_set", "message": "Datafile set", "details": details})
         except Exception as exc:
             self.report_diagnostic({"level": "error", "code": "invalid_datafile", "message": "Could not parse datafile", "originalError": exc})
 
@@ -70,7 +69,7 @@ class FeaturevisorInstance:
         previous = self.sticky or {}
         self.sticky = dict(sticky) if replace else {**(self.sticky or {}), **sticky}
         params = get_params_for_sticky_set_event(previous, self.sticky, replace)
-        self.logger.info("sticky features set", params)
+        self.report_diagnostic({"level": "info", "code": "sticky_set", "message": "Sticky features set", "details": params})
         self.emitter.trigger("sticky_set", params)
 
     def get_revision(self) -> str:
@@ -103,7 +102,12 @@ class FeaturevisorInstance:
             return
         self.context = dict(context) if replace else {**self.context, **context}
         self.emitter.trigger("context_set", {"context": self.context, "replaced": replace})
-        self.logger.debug("context replaced" if replace else "context updated", {"context": self.context, "replaced": replace})
+        self.report_diagnostic({
+            "level": "debug",
+            "code": "context_set",
+            "message": "Context replaced" if replace else "Context updated",
+            "details": {"context": self.context, "replaced": replace},
+        })
 
     def get_context(self, context: dict[str, Any] | None = None) -> dict[str, Any]:
         return {**self.context, **context} if context else self.context

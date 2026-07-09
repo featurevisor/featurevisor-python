@@ -127,6 +127,19 @@ class SDKTests(unittest.TestCase):
 
         self.assertEqual([event["replaced"] for event in events], [False, True])
 
+    def test_lifecycle_mutations_report_diagnostics(self) -> None:
+        diagnostics = []
+        instance = create_instance({"logLevel": "debug", "onDiagnostic": lambda diagnostic: diagnostics.append(diagnostic)})
+
+        instance.set_datafile({"schemaVersion": "2", "revision": "1", "segments": {}, "features": {}})
+        instance.set_sticky({"test": {"enabled": True}})
+        instance.set_context({"country": "nl"})
+
+        codes = [diagnostic["code"] for diagnostic in diagnostics]
+        self.assertIn("datafile_set", codes)
+        self.assertIn("sticky_set", codes)
+        self.assertIn("context_set", codes)
+
     def test_module_lifecycle_duplicate_diagnostics_and_close(self) -> None:
         diagnostics = []
         errors = []
