@@ -123,7 +123,7 @@ class FeaturevisorInstance:
             "logger": self.logger,
             "modulesManager": self.modules_manager,
             "datafileReader": self.datafile_reader,
-            "sticky": {**(self.sticky or {}), **options.get("sticky", {})} if options.get("sticky") else self.sticky,
+            "sticky": options.get("__featurevisor_child_sticky") or self.sticky,
             "defaultVariationValue": options.get("defaultVariationValue"),
             "defaultVariableValue": options.get("defaultVariableValue"),
         }
@@ -245,6 +245,13 @@ class FeaturevisorInstance:
         diagnostic["level"] = diagnostic.get("level") or "info"
         if source_module and source_module.name and not diagnostic.get("module"):
             diagnostic["module"] = source_module.name
+        details = dict(diagnostic.get("details") or {})
+        reserved = {"level", "code", "message", "module", "moduleName", "originalError", "details"}
+        for key, value in list(diagnostic.items()):
+            if key not in reserved:
+                details[key] = value
+                del diagnostic[key]
+        diagnostic["details"] = details
 
         for subscription in list(self.module_diagnostic_subscriptions):
             if source_module and subscription["moduleId"] == source_module.id:
@@ -256,8 +263,7 @@ class FeaturevisorInstance:
             if self._should_report_diagnostic(diagnostic["level"], self.logger.level):
                 self.on_diagnostic(diagnostic)
         else:
-            details = {key: value for key, value in diagnostic.items() if key not in {"level", "message"}}
-            self.logger.log(diagnostic["level"], diagnostic.get("message", ""), details)
+            self.logger.log(diagnostic["level"], diagnostic.get("message", ""), diagnostic)
 
         if diagnostic["level"] in {"error", "fatal"}:
             self.emitter.trigger("error", diagnostic)

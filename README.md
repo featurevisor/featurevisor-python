@@ -197,6 +197,8 @@ all_evaluations = f.get_all_evaluations()
 
 You can pin feature evaluations with sticky values:
 
+Sticky values belong to an SDK or child instance. Evaluation options do not accept sticky overrides; use `spawn(context, {"sticky": ...})` when a child needs its own sticky state.
+
 ```python
 f = create_instance({
     "sticky": {
@@ -346,6 +348,8 @@ f = create_instance({
 ```
 
 If `onDiagnostic` is not provided, diagnostics are sent to the SDK logger.
+
+Every diagnostic has `level`, `code`, `message`, and an object-shaped `details` dictionary. Optional `module`, `moduleName`, and `originalError` fields describe provenance; evaluation metadata belongs in `details`.
 
 ## Events
 
