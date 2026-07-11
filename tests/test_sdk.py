@@ -179,6 +179,25 @@ class SDKTests(unittest.TestCase):
 
         self.assertEqual(closed, ["dynamic"])
 
+    def test_module_setup_and_diagnostic_handler_failures_are_isolated(self) -> None:
+        diagnostics = []
+        closed = []
+        seen = []
+        instance = create_instance({"logLevel": "error", "onDiagnostic": lambda diagnostic: diagnostics.append(diagnostic)})
+
+        def fail_setup(api):
+            api["onDiagnostic"](lambda diagnostic: None)
+            raise RuntimeError("setup failed")
+
+        self.assertIsNone(instance.add_module({"name": "broken-setup", "setup": fail_setup, "close": lambda: closed.append("broken-setup")}))
+        self.assertEqual(closed, ["broken-setup"])
+        self.assertTrue(any(item.get("code") == "module_setup_error" for item in diagnostics))
+
+        instance.add_module({"name": "broken-handler", "setup": lambda api: api["onDiagnostic"](lambda diagnostic: (_ for _ in ()).throw(RuntimeError("handler failed")), {"logLevel": "debug"})})
+        instance.add_module({"name": "working-handler", "setup": lambda api: api["onDiagnostic"](lambda diagnostic: seen.append(diagnostic["code"]), {"logLevel": "debug"})})
+        instance.set_context({"country": "nl"})
+        self.assertIn("context_set", seen)
+
     def test_module_close_errors_are_reported_and_do_not_stop_cleanup(self) -> None:
         diagnostics = []
         errors = []

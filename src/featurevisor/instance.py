@@ -257,11 +257,17 @@ class FeaturevisorInstance:
             if source_module and subscription["moduleId"] == source_module.id:
                 continue
             if self._should_report_diagnostic(diagnostic["level"], subscription["level"]):
-                subscription["handler"](diagnostic)
+                try:
+                    subscription["handler"](diagnostic)
+                except Exception as exc:
+                    print("[Featurevisor] Diagnostic handler failed:", exc)
 
         if self.on_diagnostic:
             if self._should_report_diagnostic(diagnostic["level"], self.logger.level):
-                self.on_diagnostic(diagnostic)
+                try:
+                    self.on_diagnostic(diagnostic)
+                except Exception as exc:
+                    print("[Featurevisor] Diagnostic handler failed:", exc)
         else:
             self.logger.log(diagnostic["level"], diagnostic.get("message", ""), diagnostic)
 

@@ -82,7 +82,23 @@ class ModulesManager:
             return None
 
         if self.module_api_factory:
-            module.call_setup(self.module_api_factory(module))
+            try:
+                module.call_setup(self.module_api_factory(module))
+            except Exception as exc:
+                if self.clear_module_diagnostic_subscriptions:
+                    self.clear_module_diagnostic_subscriptions(module)
+                self._report(
+                    {
+                        "level": "error",
+                        "code": "module_setup_error",
+                        "message": "Module setup failed",
+                        "moduleName": module.name,
+                        "originalError": exc,
+                    },
+                    None,
+                )
+                self._close_module(module)
+                return None
 
         self.modules.append(module)
 

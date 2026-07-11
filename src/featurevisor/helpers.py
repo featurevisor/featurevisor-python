@@ -9,20 +9,22 @@ def get_value_by_type(value: Any, field_type: str) -> Any:
     if field_type == "string":
         return value if isinstance(value, str) else None
     if field_type == "integer":
-        try:
+        if isinstance(value, bool):
+            return None
+        if isinstance(value, int):
+            return value
+        if isinstance(value, float) and value.is_integer():
             return int(value)
-        except (TypeError, ValueError):
-            return None
+        return None
     if field_type == "double":
-        try:
-            return float(value)
-        except (TypeError, ValueError):
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
             return None
+        result = float(value)
+        return result if result not in {float("inf"), float("-inf")} and result == result else None
     if field_type == "boolean":
-        return value is True
+        return value if isinstance(value, bool) else None
     if field_type == "array":
         return value if isinstance(value, list) else None
     if field_type == "object":
         return value if isinstance(value, dict) else None
     return value
-

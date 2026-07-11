@@ -7,12 +7,12 @@ import unittest
 sys.path.insert(0, "src")
 
 import featurevisor
-from featurevisor import createInstance
+from featurevisor import create_instance
 from featurevisor.logger import create_logger
 
 class InstanceParityTests(unittest.TestCase):
     def test_should_be_a_function(self) -> None:
-        self.assertTrue(callable(createInstance))
+        self.assertTrue(callable(create_instance))
 
     def test_root_public_surface_is_narrow(self) -> None:
         self.assertEqual(
@@ -20,19 +20,17 @@ class InstanceParityTests(unittest.TestCase):
             {
                 "Featurevisor",
                 "FeaturevisorChildInstance",
-                "FeaturevisorInstance",
                 "FeaturevisorModule",
                 "ModulesManager",
                 "Logger",
                 "create_instance",
-                "createInstance",
             },
         )
         self.assertFalse(hasattr(featurevisor, "DatafileReader"))
         self.assertFalse(hasattr(featurevisor, "createLogger"))
 
     def test_should_create_instance_with_datafile_content(self) -> None:
-        sdk = createInstance({"datafile": {"schemaVersion": "2", "revision": "1.0", "features": {}, "segments": {}}})
+        sdk = create_instance({"datafile": {"schemaVersion": "2", "revision": "1.0", "features": {}, "segments": {}}})
         self.assertTrue(callable(sdk.getVariation))
 
     def test_should_configure_plain_and_and_or_bucket_by(self) -> None:
@@ -43,7 +41,7 @@ class InstanceParityTests(unittest.TestCase):
         ]
         for _, bucket_by, context, expected_bucket in cases:
             captured = {"bucket": ""}
-            sdk = createInstance(
+            sdk = create_instance(
                 {
                     "datafile": {
                         "schemaVersion": "2",
@@ -67,7 +65,7 @@ class InstanceParityTests(unittest.TestCase):
 
     def test_should_intercept_before_and_after_modules(self) -> None:
         before = {"called": False, "featureKey": "", "variableKey": None}
-        sdk = createInstance(
+        sdk = create_instance(
             {
                 "datafile": {
                     "schemaVersion": "2",
@@ -101,7 +99,7 @@ class InstanceParityTests(unittest.TestCase):
             },
             "segments": {},
         }
-        sdk = createInstance({"sticky": {"test": {"enabled": True, "variation": "control", "variables": {"color": "red"}}}, "logLevel": "fatal"})
+        sdk = create_instance({"sticky": {"test": {"enabled": True, "variation": "control", "variables": {"color": "red"}}}, "logLevel": "fatal"})
         self.assertEqual(sdk.getVariation("test", {"userId": "123"}), "control")
         self.assertEqual(sdk.getVariable("test", "color", {"userId": "123"}), "red")
         sdk.setDatafile(datafile)
@@ -112,7 +110,7 @@ class InstanceParityTests(unittest.TestCase):
 
     def test_required_deprecated_and_rule_override_cases(self) -> None:
         logger_calls = []
-        sdk = createInstance(
+        sdk = create_instance(
             {
                 "datafile": {
                     "schemaVersion": "2",
@@ -136,7 +134,7 @@ class InstanceParityTests(unittest.TestCase):
 
     def test_mutually_exclusive_variation_and_variable_cases(self) -> None:
         bucket = {"value": 10000}
-        sdk = createInstance(
+        sdk = create_instance(
             {
                 "modules": [{"name": "unit-test", "bucketValue": lambda options, bucket=bucket: bucket["value"]}],
                 "datafile": {
@@ -198,7 +196,7 @@ class InstanceParityTests(unittest.TestCase):
         self.assertEqual(all_evaluations["test"]["variation"], "treatment")
 
     def test_variables_without_variations_rule_overrides_arrays_objects_and_individual_segments(self) -> None:
-        sdk = createInstance(
+        sdk = create_instance(
             {
                 "datafile": {
                     "schemaVersion": "2",

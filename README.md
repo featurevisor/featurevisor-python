@@ -185,6 +185,8 @@ f.get_variable_object(feature_key, variable_key, context={})
 f.get_variable_json(feature_key, variable_key, context={})
 ```
 
+Type specific methods do not coerce values. `get_variable_integer()` returns `None` for the string `"1"`, and boolean getters return `None` for non-boolean values.
+
 ## Getting all evaluations
 
 ```python
@@ -351,6 +353,8 @@ If `onDiagnostic` is not provided, diagnostics are sent to the SDK logger.
 
 Every diagnostic has `level`, `code`, `message`, and an object-shaped `details` dictionary. Optional `module`, `moduleName`, and `originalError` fields describe provenance; evaluation metadata belongs in `details`.
 
+Diagnostic handlers are isolated from SDK behavior. An exception in a handler does not stop other handlers or evaluations.
+
 ## Events
 
 Featurevisor SDK implements a simple event emitter that allows you to listen to events that happen in the runtime.
@@ -453,6 +457,8 @@ my_module = {
 ```
 
 The module API passed to `setup` exposes `getRevision`, `onDiagnostic`, and `reportDiagnostic`.
+
+If `setup` raises an exception, the module is not registered. Featurevisor removes subscriptions created during setup, reports `module_setup_error`, and calls `close` when present.
 
 ### Registering modules
 
