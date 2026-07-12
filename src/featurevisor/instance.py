@@ -79,6 +79,14 @@ class Featurevisor:
 
         try:
             parsed = json.loads(datafile) if isinstance(datafile, str) else datafile
+            if not (
+                isinstance(parsed, dict)
+                and isinstance(parsed.get("schemaVersion"), str)
+                and isinstance(parsed.get("revision"), str)
+                and isinstance(parsed.get("segments"), dict)
+                and isinstance(parsed.get("features"), dict)
+            ):
+                raise ValueError("Invalid datafile")
             next_datafile = parsed if replace else self._merge_datafiles(self.datafile_reader.get_datafile(), parsed)
             new_reader = _DatafileReader(datafile=next_datafile, logger=self.logger)
             details = get_params_for_datafile_set_event(self.datafile_reader, new_reader, replace)
@@ -283,7 +291,7 @@ class Featurevisor:
     def report_diagnostic(self, diagnostic: dict[str, Any], source_module: FeaturevisorModule | None = None) -> None:
         diagnostic = dict(diagnostic or {})
         diagnostic["level"] = diagnostic.get("level") or "info"
-        if source_module and source_module.name and not diagnostic.get("module"):
+        if source_module and source_module.name:
             diagnostic["module"] = source_module.name
         details = dict(diagnostic.get("details") or {})
         reserved = {"level", "code", "message", "module", "moduleName", "originalError", "details"}

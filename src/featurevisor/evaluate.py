@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 import json
-from enum import StrEnum
+from enum import Enum
 from typing import Any
 
 from .bucketer import get_bucket_key, get_bucketed_number
 
 
-class EvaluationReason(StrEnum):
+class EvaluationReason(str, Enum):
     FEATURE_NOT_FOUND = "feature_not_found"
     DISABLED = "disabled"
     REQUIRED = "required"
@@ -25,6 +25,9 @@ class EvaluationReason(StrEnum):
     RULE = "rule"
     ALLOCATED = "allocated"
     ERROR = "error"
+
+    def __str__(self) -> str:
+        return self.value
 
 
 def evaluate_with_modules(options: dict[str, Any]) -> dict[str, Any]:
