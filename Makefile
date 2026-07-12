@@ -32,4 +32,4 @@ test:
 .PHONY: test-example-1
 test-example-1:
 	PYTHONPATH=src python3 -m unittest discover -s tests -v
-	PYTHONPATH=src python3 -m featurevisor test --projectDirectoryPath=/Users/fahad/Projects/featurevisor/featurevisor/examples/example-1 --onlyFailures
+	PYTHONPATH=src python3 -m featurevisor test --projectDirectoryPath=../featurevisor/examples/example-1 --onlyFailures
