@@ -86,7 +86,7 @@ def pretty_duration(seconds: float) -> str:
     return " ".join(parts)
 
 
-def timed_build(project: FeaturevisorProject, *, environment: str, inflate: int | None = None) -> tuple[dict[str, Any], float]:
+def timed_build(project: FeaturevisorProject, *, environment: str, inflate: int | None = None, target: str | None = None) -> tuple[dict[str, Any], float]:
     start = time.perf_counter()
-    datafile = project.build_datafile_json(environment=environment, inflate=inflate)
+    datafile = project.build_datafile_json(environment=environment, inflate=inflate, target=target)
     return datafile, time.perf_counter() - start

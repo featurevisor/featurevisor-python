@@ -33,6 +33,10 @@ class CLITests(unittest.TestCase):
         self.assertEqual(args.n, 20)
         self.assertTrue(args.variation)
 
+    def test_parse_repeated_targets(self) -> None:
+        args = build_parser().parse_args(["benchmark", "--target=web", "--target=mobile"])
+        self.assertEqual(args.target, ["web", "mobile"])
+
     def test_main_returns_non_zero_on_failed_tests(self) -> None:
         with patch("featurevisor.cli.run_test_project", return_value=False):
             self.assertEqual(main(["test"]), 1)

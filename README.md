@@ -501,6 +501,8 @@ python -m featurevisor assess-distribution
 
 These commands are intended for use from inside a Featurevisor project and rely on `npx featurevisor` being available locally.
 
+All three commands accept repeatable `--target=<target>` options. `test` builds only the selected Target datafiles and runs untargeted assertions plus assertions for those targets. `benchmark` and `assess-distribution` run independently against every selected Target datafile. Without `--target`, existing project-wide behavior is preserved. Project definitions, test specs, Target discovery, and datafile generation continue to come from the Node.js CLI.
+
 ### Test
 
 Run Featurevisor test specs using the Python SDK:

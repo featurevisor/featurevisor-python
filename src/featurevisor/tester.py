@@ -178,13 +178,23 @@ def test_segment(segment: dict[str, Any], assertion_options: dict[str, Any] | No
     return result
 
 
-def run_test_project(project_directory_path: str, *, key_pattern: str | None = None, assertion_pattern: str | None = None, verbose: bool = False, quiet: bool = False, show_datafile: bool = False, only_failures: bool = False, schema_version: str | None = None, inflate: int = 0, with_scopes: bool = False, with_tags: bool = False) -> bool:
+def _resolve_targets(project: FeaturevisorProject, requested: list[str] | None) -> list[str]:
+    available = project.list_targets()
+    selected = list(dict.fromkeys(requested or []))
+    unknown = next((target for target in selected if target not in available), None)
+    if unknown:
+        raise ValueError(f'Unknown target "{unknown}". Available targets: {", ".join(available) or "none"}.')
+    return selected
+
+
+def run_test_project(project_directory_path: str, *, key_pattern: str | None = None, assertion_pattern: str | None = None, verbose: bool = False, quiet: bool = False, show_datafile: bool = False, only_failures: bool = False, schema_version: str | None = None, inflate: int = 0, with_scopes: bool = False, with_tags: bool = False, targets: list[str] | None = None) -> bool:
     project = FeaturevisorProject(project_directory_path)
     config = project.get_config()
     tests = project.list_tests(key_pattern=key_pattern, assertion_pattern=assertion_pattern)
     features_by_key = {item["key"]: item for item in project.list_features()}
     segments_by_key = {item["key"]: item for item in project.list_segments()}
-    targets = project.list_targets()
+    selected_targets = _resolve_targets(project, targets)
+    targets_to_build = selected_targets or project.list_targets()
     datafile_cache: dict[Any, dict[str, Any]] = {}
     start = time.perf_counter()
     passed_tests_count = 0
@@ -198,7 +208,7 @@ def run_test_project(project_directory_path: str, *, key_pattern: str | None = N
     for environment in environments or [None]:
         base_key = environment if environment is not None else False
         datafile_cache[base_key] = project.build_datafile_json(environment=environment, inflate=inflate or None)
-        for target in targets:
+        for target in targets_to_build:
             datafile_cache[_get_target_datafile_key(base_key, target)] = project.build_datafile_json(
                 environment=environment,
                 inflate=inflate or None,
@@ -208,13 +218,19 @@ def run_test_project(project_directory_path: str, *, key_pattern: str | None = N
     passed = True
     for test in tests:
         if test.get("feature"):
+            assertions = [
+                assertion for assertion in test["assertions"]
+                if not selected_targets or not assertion.get("target") or assertion.get("target") in selected_targets
+            ]
+            if not assertions:
+                continue
             feature_key = test["feature"]
             result = {"type": "feature", "key": feature_key, "notFound": False, "passed": True, "duration": 0, "assertions": []}
             feature_start = time.perf_counter()
             if not any(item.get("feature") == feature_key for item in tests):
                 result["notFound"] = True
                 result["passed"] = False
-            for assertion in test["assertions"]:
+            for assertion in assertions:
                 assertion_start = time.perf_counter()
                 datafile = _get_datafile_for_assertion(assertion, datafile_cache)
                 if show_datafile:
@@ -269,9 +285,17 @@ def run_test_project(project_directory_path: str, *, key_pattern: str | None = N
     return passed
 
 
-def run_benchmark(project_directory_path: str, *, environment: str, feature: str, context: dict[str, Any] | None = None, n: int = 1000, variation: bool = False, variable: str | None = None, schema_version: str | None = None, inflate: int = 0, verbose: bool = False, quiet: bool = False) -> int:
+def run_benchmark(project_directory_path: str, *, environment: str, feature: str, context: dict[str, Any] | None = None, n: int = 1000, variation: bool = False, variable: str | None = None, schema_version: str | None = None, inflate: int = 0, verbose: bool = False, quiet: bool = False, targets: list[str] | None = None) -> int:
     project = FeaturevisorProject(project_directory_path)
-    datafile, build_duration = timed_build(project, environment=environment, inflate=inflate or None)
+    selected_targets = _resolve_targets(project, targets)
+    entries = selected_targets or [None]
+    for target in entries:
+        datafile, build_duration = timed_build(project, environment=environment, inflate=inflate or None, target=target)
+        _run_benchmark_datafile(datafile, build_duration, environment=environment, target=target, feature=feature, context=context, n=n, variation=variation, variable=variable, verbose=verbose, quiet=quiet)
+    return 0
+
+
+def _run_benchmark_datafile(datafile: dict[str, Any], build_duration: float, *, environment: str, target: str | None, feature: str, context: dict[str, Any] | None, n: int, variation: bool, variable: str | None, verbose: bool, quiet: bool) -> None:
     level = _log_level(verbose, quiet)
     instance = create_instance({"datafile": datafile, "logLevel": level})
     context = context or {}
@@ -294,7 +318,12 @@ def run_benchmark(project_directory_path: str, *, environment: str, feature: str
     duration = total_duration_ns / 1_000_000_000
     average_duration_ns = total_duration_ns / n if n else 0
     print("")
-    print(f'Running benchmark for feature "{feature}"...')
+    print("Benchmark Featurevisor feature")
+    print(f"  Feature: {feature}")
+    print(f"  Environment: {environment}")
+    if target:
+        print(f"  Target: {target}")
+    print(f"  Iterations: {n}")
     print("")
     print(f'Datafile build duration: {int(build_duration * 1000)}ms')
     print(f"Datafile size: {len(json.dumps(datafile).encode()) / 1024:.2f} kB")
@@ -304,12 +333,18 @@ def run_benchmark(project_directory_path: str, *, environment: str, feature: str
     print(f"Minimum duration: {(min_duration_ns or 0) / 1_000_000:.6f}ms")
     print(f"Average duration: {average_duration_ns / 1_000_000:.6f}ms")
     print(f"Maximum duration: {max_duration_ns / 1_000_000:.6f}ms")
+
+
+def run_assess_distribution(project_directory_path: str, *, environment: str, feature: str, context: dict[str, Any] | None = None, n: int = 1000, populate_uuid: list[str] | None = None, schema_version: str | None = None, inflate: int = 0, verbose: bool = False, quiet: bool = False, targets: list[str] | None = None) -> int:
+    project = FeaturevisorProject(project_directory_path)
+    selected_targets = _resolve_targets(project, targets)
+    for target in selected_targets or [None]:
+        datafile = project.build_datafile_json(environment=environment, inflate=inflate or None, target=target)
+        _run_assess_datafile(datafile, environment=environment, target=target, feature=feature, context=context, n=n, populate_uuid=populate_uuid, verbose=verbose, quiet=quiet)
     return 0
 
 
-def run_assess_distribution(project_directory_path: str, *, environment: str, feature: str, context: dict[str, Any] | None = None, n: int = 1000, populate_uuid: list[str] | None = None, schema_version: str | None = None, inflate: int = 0, verbose: bool = False, quiet: bool = False) -> int:
-    project = FeaturevisorProject(project_directory_path)
-    datafile = project.build_datafile_json(environment=environment, inflate=inflate or None)
+def _run_assess_datafile(datafile: dict[str, Any], *, environment: str, target: str | None, feature: str, context: dict[str, Any] | None, n: int, populate_uuid: list[str] | None, verbose: bool, quiet: bool) -> None:
     instance = create_instance({"datafile": datafile, "logLevel": _log_level(verbose, quiet)})
     context = context or {}
     populate_uuid = populate_uuid or []
@@ -317,7 +352,12 @@ def run_assess_distribution(project_directory_path: str, *, environment: str, fe
     has_variations = bool(feature_definition.get("variations"))
     flag_counts = {"enabled": 0, "disabled": 0}
     variation_counts: dict[str, int] = {}
-    print(f"\nAssessing distribution for feature: {feature} ...")
+    print("\nAssess Featurevisor distribution")
+    print(f"  Feature: {feature}")
+    print(f"  Environment: {environment}")
+    if target:
+        print(f"  Target: {target}")
+    print(f"  Iterations: {n}")
     print(f"Against context: {json.dumps(context)}")
     print(f"Running {n} times...")
     for _ in range(n):
@@ -337,4 +377,3 @@ def run_assess_distribution(project_directory_path: str, *, environment: str, fe
         print("\n\nVariation evaluations:")
         for key, count in sorted(variation_counts.items(), key=lambda item: item[1], reverse=True):
             print(f"  - {key}: {count} {(count / n) * 100:.2f}%")
-    return 0
