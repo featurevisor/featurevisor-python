@@ -9,6 +9,7 @@ This SDK is compatible with Featurevisor v3 projects and v2 datafiles.
 ## Table of contents <!-- omit in toc -->
 
 - [Installation](#installation)
+- [Public API](#public-api)
 - [Initialization](#initialization)
 - [Evaluation types](#evaluation-types)
 - [Context](#context)
@@ -30,16 +31,14 @@ This SDK is compatible with Featurevisor v3 projects and v2 datafiles.
   - [Loading datafiles on demand](#loading-datafiles-on-demand)
   - [Updating datafile](#updating-datafile)
   - [Interval-based update](#interval-based-update)
-- [Logging](#logging)
+- [Diagnostics](#diagnostics)
   - [Levels](#levels)
-  - [Customizing levels](#customizing-levels)
   - [Handler](#handler)
 - [Events](#events)
   - [`datafile_set`](#datafile_set)
   - [`context_set`](#context_set)
   - [`sticky_set`](#sticky_set)
   - [`error`](#error)
-- [Diagnostics](#diagnostics)
 - [Modules](#modules)
   - [Defining a module](#defining-a-module)
   - [Registering modules](#registering-modules)
@@ -61,6 +60,20 @@ This SDK is compatible with Featurevisor v3 projects and v2 datafiles.
 pip install featurevisor
 ```
 
+## Public API
+
+The main runtime API is `create_featurevisor()`:
+
+```python
+from featurevisor import Featurevisor, create_featurevisor
+
+f: Featurevisor = create_featurevisor({
+    "datafile": datafile_content,
+})
+```
+
+Most applications only need `create_featurevisor` and the `Featurevisor` instance type. Public extension and observability APIs include `FeaturevisorModule`, diagnostics, events, and the datafile dictionaries accepted by the factory.
+
 ## Initialization
 
 Initialize the SDK with Featurevisor datafile content:
@@ -69,14 +82,14 @@ Initialize the SDK with Featurevisor datafile content:
 from urllib.request import urlopen
 import json
 
-from featurevisor import create_instance
+from featurevisor import create_featurevisor
 
 datafile_url = "https://cdn.yoursite.com/datafile.json"
 
 with urlopen(datafile_url) as response:
     datafile_content = json.load(response)
 
-f = create_instance({
+f = create_featurevisor({
     "datafile": datafile_content,
 })
 ```
@@ -105,7 +118,7 @@ context = {
 You can provide context at initialization:
 
 ```python
-f = create_instance({
+f = create_featurevisor({
     "context": {
         "deviceId": "123",
         "country": "nl",
@@ -202,7 +215,7 @@ You can pin feature evaluations with sticky values:
 Sticky values belong to an SDK or child instance. Evaluation options do not accept sticky overrides; use `spawn(context, {"sticky": ...})` when a child needs its own sticky state.
 
 ```python
-f = create_instance({
+f = create_featurevisor({
     "sticky": {
         "myFeatureKey": {
             "enabled": True,
@@ -264,9 +277,9 @@ This pairs well with [targets](https://featurevisor.com/docs/targets/), where ea
 from urllib.request import urlopen
 import json
 
-from featurevisor import create_instance
+from featurevisor import create_featurevisor
 
-f = create_instance({})
+f = create_featurevisor({})
 
 def load_datafile(target):
     url = f"https://cdn.yoursite.com/production/featurevisor-{target}.json"
@@ -304,56 +317,40 @@ def update_datafile():
 update_datafile()
 ```
 
-## Logging
+## Diagnostics
 
-By default, Featurevisor SDKs report diagnostics/logs for `info` level and above.
+By default, Featurevisor reports diagnostics to the console for `info` level and above with a `[Featurevisor]` prefix.
 
 ### Levels
 
-Supported log levels:
+Available diagnostic levels are `fatal`, `error`, `warn`, `info`, and `debug`.
 
-- `fatal`
-- `error`
-- `warn`
-- `info`
-- `debug`
-
-### Customizing levels
+Set the level during initialization or update it afterwards:
 
 ```python
-from featurevisor import create_instance
-
-f = create_instance({
-    "datafile": datafile_content,
-    "logLevel": "debug",
-})
-```
-
-You can also set the log level from the SDK instance afterwards:
-
-```python
-f.set_log_level("debug")
+f = create_featurevisor({"logLevel": "debug"})
+f.set_log_level("info")
 ```
 
 ### Handler
 
-You can also provide a custom logger handler via `create_logger`.
-
-## Diagnostics
-
-Diagnostics provide structured SDK and module events for observability:
+Use `onDiagnostic` to send structured diagnostics to your observability system:
 
 ```python
-f = create_instance({
-    "onDiagnostic": lambda diagnostic: print(diagnostic),
+f = create_featurevisor({
+    "logLevel": "info",
+    "onDiagnostic": lambda diagnostic: print(
+        diagnostic["level"],
+        diagnostic["code"],
+        diagnostic["message"],
+    ),
 })
 ```
 
-If `onDiagnostic` is not provided, diagnostics are sent to the SDK logger.
-
-Every diagnostic has `level`, `code`, `message`, and an object-shaped `details` dictionary. Optional `module`, `moduleName`, and `originalError` fields describe provenance; evaluation metadata belongs in `details`.
+Every diagnostic has `level`, `code`, `message`, and an object-shaped `details` dictionary. Optional `module`, `moduleName`, and `originalError` fields describe provenance. Evaluation metadata belongs in `details`.
 
 Diagnostic handlers are isolated from SDK behavior. An exception in a handler does not stop other handlers or evaluations.
+
 
 ## Events
 
@@ -466,7 +463,7 @@ Modules can be registered at initialization or afterwards:
 
 ```python
 
-f = create_instance({
+f = create_featurevisor({
     "modules": [my_module],
 })
 

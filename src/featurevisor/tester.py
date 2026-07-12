@@ -6,8 +6,8 @@ import uuid
 from typing import Any
 
 from .datafile_reader import _DatafileReader
-from .instance import create_instance
-from .logger import create_logger
+from .instance import create_featurevisor
+from .logger import _create_logger
 from .project import FeaturevisorProject, pretty_duration, timed_build
 
 
@@ -160,7 +160,7 @@ def _assert_feature(sdk, feature_key: str, assertion: dict[str, Any], datafile: 
 
 def test_segment(segment: dict[str, Any], assertion_options: dict[str, Any] | None = None) -> dict[str, Any]:
     options = assertion_options or {}
-    logger = create_logger({"level": _log_level(options.get("verbose", False), options.get("quiet", False))})
+    logger = _create_logger({"level": _log_level(options.get("verbose", False), options.get("quiet", False))})
     reader = _DatafileReader(datafile={"schemaVersion": "2", "revision": "tester", "segments": {}, "features": {}}, logger=logger)
     result = {"type": "segment", "key": segment["segment"], "notFound": False, "passed": True, "duration": 0, "assertions": []}
     start = time.perf_counter()
@@ -235,7 +235,7 @@ def run_test_project(project_directory_path: str, *, key_pattern: str | None = N
                 datafile = _get_datafile_for_assertion(assertion, datafile_cache)
                 if show_datafile:
                     print(json.dumps(datafile, indent=2))
-                sdk = create_instance({
+                sdk = create_featurevisor({
                     "datafile": datafile,
                     "sticky": assertion.get("sticky", {}),
                     "modules": [
@@ -297,7 +297,7 @@ def run_benchmark(project_directory_path: str, *, environment: str, feature: str
 
 def _run_benchmark_datafile(datafile: dict[str, Any], build_duration: float, *, environment: str, target: str | None, feature: str, context: dict[str, Any] | None, n: int, variation: bool, variable: str | None, verbose: bool, quiet: bool) -> None:
     level = _log_level(verbose, quiet)
-    instance = create_instance({"datafile": datafile, "logLevel": level})
+    instance = create_featurevisor({"datafile": datafile, "logLevel": level})
     context = context or {}
     total_duration_ns = 0
     min_duration_ns: int | None = None
@@ -345,7 +345,7 @@ def run_assess_distribution(project_directory_path: str, *, environment: str, fe
 
 
 def _run_assess_datafile(datafile: dict[str, Any], *, environment: str, target: str | None, feature: str, context: dict[str, Any] | None, n: int, populate_uuid: list[str] | None, verbose: bool, quiet: bool) -> None:
-    instance = create_instance({"datafile": datafile, "logLevel": _log_level(verbose, quiet)})
+    instance = create_featurevisor({"datafile": datafile, "logLevel": _log_level(verbose, quiet)})
     context = context or {}
     populate_uuid = populate_uuid or []
     feature_definition = instance.get_feature(feature) or {}

@@ -5,12 +5,12 @@ import re
 from typing import Any
 
 from .conditions import condition_is_matched
-from .logger import Logger
+from .logger import _Logger
 from .types import Context, DatafileContent, Feature, Force, Segment, Traffic
 
 
 class _DatafileReader:
-    def __init__(self, *, datafile: DatafileContent, logger: Logger) -> None:
+    def __init__(self, *, datafile: DatafileContent, logger: _Logger) -> None:
         self.logger = logger
         self.schema_version = datafile["schemaVersion"]
         self.revision = datafile["revision"]

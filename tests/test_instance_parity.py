@@ -7,12 +7,12 @@ import unittest
 sys.path.insert(0, "src")
 
 import featurevisor
-from featurevisor import create_instance
-from featurevisor.logger import create_logger
+from featurevisor import create_featurevisor
 
 class InstanceParityTests(unittest.TestCase):
     def test_should_be_a_function(self) -> None:
-        self.assertTrue(callable(create_instance))
+        self.assertTrue(callable(create_featurevisor))
+        self.assertFalse(hasattr(featurevisor, "create_instance"))
 
     def test_root_public_surface_is_narrow(self) -> None:
         self.assertEqual(
@@ -21,16 +21,16 @@ class InstanceParityTests(unittest.TestCase):
                 "Featurevisor",
                 "FeaturevisorChildInstance",
                 "FeaturevisorModule",
-                "ModulesManager",
-                "Logger",
-                "create_instance",
+                "create_featurevisor",
             },
         )
         self.assertFalse(hasattr(featurevisor, "DatafileReader"))
         self.assertFalse(hasattr(featurevisor, "createLogger"))
 
-    def test_should_create_instance_with_datafile_content(self) -> None:
-        sdk = create_instance({"datafile": {"schemaVersion": "2", "revision": "1.0", "features": {}, "segments": {}}})
+    def test_should_create_featurevisor_with_datafile_content(self) -> None:
+        sdk = create_featurevisor({"datafile": {"schemaVersion": "2", "revision": "1.0", "features": {}, "segments": {}}})
+        self.assertEqual(sdk.get_schema_version(), "2")
+        self.assertEqual(sdk.get_feature_keys(), [])
         self.assertTrue(callable(sdk.getVariation))
 
     def test_should_configure_plain_and_and_or_bucket_by(self) -> None:
@@ -41,7 +41,7 @@ class InstanceParityTests(unittest.TestCase):
         ]
         for _, bucket_by, context, expected_bucket in cases:
             captured = {"bucket": ""}
-            sdk = create_instance(
+            sdk = create_featurevisor(
                 {
                     "datafile": {
                         "schemaVersion": "2",
@@ -65,7 +65,7 @@ class InstanceParityTests(unittest.TestCase):
 
     def test_should_intercept_before_and_after_modules(self) -> None:
         before = {"called": False, "featureKey": "", "variableKey": None}
-        sdk = create_instance(
+        sdk = create_featurevisor(
             {
                 "datafile": {
                     "schemaVersion": "2",
@@ -99,7 +99,7 @@ class InstanceParityTests(unittest.TestCase):
             },
             "segments": {},
         }
-        sdk = create_instance({"sticky": {"test": {"enabled": True, "variation": "control", "variables": {"color": "red"}}}, "logLevel": "fatal"})
+        sdk = create_featurevisor({"sticky": {"test": {"enabled": True, "variation": "control", "variables": {"color": "red"}}}, "logLevel": "fatal"})
         self.assertEqual(sdk.getVariation("test", {"userId": "123"}), "control")
         self.assertEqual(sdk.getVariable("test", "color", {"userId": "123"}), "red")
         sdk.setDatafile(datafile)
@@ -109,8 +109,8 @@ class InstanceParityTests(unittest.TestCase):
         self.assertEqual(sdk.getVariation("test", {"userId": "123"}), "treatment")
 
     def test_required_deprecated_and_rule_override_cases(self) -> None:
-        logger_calls = []
-        sdk = create_instance(
+        diagnostics = []
+        sdk = create_featurevisor(
             {
                 "datafile": {
                     "schemaVersion": "2",
@@ -123,18 +123,18 @@ class InstanceParityTests(unittest.TestCase):
                     },
                     "segments": {"netherlands": {"key": "netherlands", "conditions": '[{"attribute":"country","operator":"equals","value":"nl"}]'}},
                 },
-                "logger": create_logger({"handler": lambda level, message, details=None: logger_calls.append((level, message))}),
+                "onDiagnostic": diagnostics.append,
             }
         )
         self.assertTrue(sdk.isEnabled("myKey"))
         self.assertEqual(sdk.getVariation("deprecatedTest", {"userId": "123"}), "control")
-        self.assertTrue(any(level == "warn" and "deprecated" in message for level, message in logger_calls))
+        self.assertTrue(any(diagnostic["code"] == "deprecated_feature" for diagnostic in diagnostics))
         self.assertTrue(sdk.isEnabled("flagOverride", {"userId": "user-123", "country": "de"}))
         self.assertFalse(sdk.isEnabled("flagOverride", {"userId": "user-123", "country": "nl"}))
 
     def test_mutually_exclusive_variation_and_variable_cases(self) -> None:
         bucket = {"value": 10000}
-        sdk = create_instance(
+        sdk = create_featurevisor(
             {
                 "modules": [{"name": "unit-test", "bucketValue": lambda options, bucket=bucket: bucket["value"]}],
                 "datafile": {
@@ -196,7 +196,7 @@ class InstanceParityTests(unittest.TestCase):
         self.assertEqual(all_evaluations["test"]["variation"], "treatment")
 
     def test_variables_without_variations_rule_overrides_arrays_objects_and_individual_segments(self) -> None:
-        sdk = create_instance(
+        sdk = create_featurevisor(
             {
                 "datafile": {
                     "schemaVersion": "2",

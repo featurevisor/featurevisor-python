@@ -7,7 +7,7 @@ import unittest
 sys.path.insert(0, "src")
 
 from featurevisor.datafile_reader import _DatafileReader
-from featurevisor.logger import create_logger
+from featurevisor.logger import _create_logger
 
 
 class ConditionsParityTests(unittest.TestCase):
@@ -15,7 +15,7 @@ class ConditionsParityTests(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.reader = _DatafileReader(
             datafile={"schemaVersion": "2.0", "revision": "1", "segments": {}, "features": {}},
-            logger=create_logger(),
+            logger=_create_logger(),
         )
 
     def test_should_be_a_function(self) -> None:

@@ -6,7 +6,7 @@ from pathlib import Path
 
 from featurevisor.datafile_reader import _DatafileReader
 from featurevisor.helpers import get_value_by_type
-from featurevisor.logger import Logger
+from featurevisor.logger import _Logger
 
 
 class SDKV3ConformanceTests(unittest.TestCase):
@@ -18,7 +18,7 @@ class SDKV3ConformanceTests(unittest.TestCase):
         self.assertEqual(self.fixture["version"], 1)
         reader = _DatafileReader(
             datafile={"schemaVersion": "2", "revision": "conformance", "segments": {}, "features": {}},
-            logger=Logger(level="fatal"),
+            logger=_Logger(level="fatal"),
         )
         traffic = {"allocation": self.fixture["bucketing"]["allocations"]}
 

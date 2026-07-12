@@ -10,17 +10,20 @@ from .emitter import Emitter
 from .evaluate import evaluate_with_modules
 from .events import get_params_for_datafile_set_event, get_params_for_sticky_set_event
 from .helpers import get_value_by_type
-from .logger import Logger, create_logger
+from .logger import _Logger, _create_logger, _default_log_handler
 from .modules import FeaturevisorModule, ModulesManager
 
 empty_datafile = {"schemaVersion": "2", "revision": "unknown", "segments": {}, "features": {}}
 
 
-class FeaturevisorInstance:
+class Featurevisor:
     def __init__(self, options: dict[str, Any] | None = None) -> None:
         options = options or {}
         self.context = options.get("context") or {}
-        self.logger: Logger = options.get("logger") or create_logger({"level": options.get("logLevel") or Logger.default_level})
+        self.logger: _Logger = _create_logger({
+            "level": options.get("logLevel") or _Logger.default_level,
+            "handler": self._handle_internal_log,
+        })
         self.on_diagnostic = options.get("onDiagnostic") or options.get("on_diagnostic")
         self.emitter = Emitter()
         self.sticky = options.get("sticky")
@@ -48,6 +51,28 @@ class FeaturevisorInstance:
     def set_log_level(self, level: str) -> None:
         self.logger.set_level(level)
 
+    def _handle_internal_log(self, level: str, message: str, details: dict[str, Any] | None = None) -> None:
+        details = dict(details or {})
+        code = str(details.get("reason") or message)
+        if message == "feature is deprecated":
+            code = "deprecated_feature"
+        elif message == "variable is deprecated":
+            code = "deprecated_variable"
+        elif message == "feature not found":
+            code = "feature_not_found"
+        elif message == "variable schema not found":
+            code = "variable_not_found"
+        elif message == "no variations":
+            code = "no_variations"
+        elif message == "invalid bucketBy":
+            code = "invalid_bucket_by"
+        self.report_diagnostic({
+            "level": level,
+            "code": code,
+            "message": message,
+            "details": details,
+        })
+
     def set_datafile(self, datafile, replace: bool = False) -> None:
         if self.closed:
             return
@@ -74,6 +99,21 @@ class FeaturevisorInstance:
 
     def get_revision(self) -> str:
         return self.datafile_reader.get_revision()
+
+    def get_schema_version(self) -> str:
+        return self.datafile_reader.get_schema_version()
+
+    def get_segment(self, segment_key: str):
+        return self.datafile_reader.get_segment(segment_key)
+
+    def get_feature_keys(self) -> list[str]:
+        return self.datafile_reader.get_feature_keys()
+
+    def get_variable_keys(self, feature_key: str) -> list[str]:
+        return self.datafile_reader.get_variable_keys(feature_key)
+
+    def has_variations(self, feature_key: str) -> bool:
+        return self.datafile_reader.has_variations(feature_key)
 
     def get_feature(self, feature_key: str):
         return self.datafile_reader.get_feature(feature_key)
@@ -268,15 +308,15 @@ class FeaturevisorInstance:
                     self.on_diagnostic(diagnostic)
                 except Exception as exc:
                     print("[Featurevisor] Diagnostic handler failed:", exc)
-        else:
-            self.logger.log(diagnostic["level"], diagnostic.get("message", ""), diagnostic)
+        elif self._should_report_diagnostic(diagnostic["level"], self.logger.level):
+            _default_log_handler(diagnostic["level"], diagnostic.get("message", ""), diagnostic)
 
         if diagnostic["level"] in {"error", "fatal"}:
             self.emitter.trigger("error", diagnostic)
 
     def _should_report_diagnostic(self, diagnostic_level: str, subscriber_level: str) -> bool:
         try:
-            return Logger.all_levels.index(subscriber_level) >= Logger.all_levels.index(diagnostic_level)
+            return _Logger.all_levels.index(subscriber_level) >= _Logger.all_levels.index(diagnostic_level)
         except ValueError:
             return False
 
@@ -293,6 +333,11 @@ class FeaturevisorInstance:
     setDatafile = set_datafile
     setSticky = set_sticky
     getRevision = get_revision
+    getSchemaVersion = get_schema_version
+    getSegment = get_segment
+    getFeatureKeys = get_feature_keys
+    getVariableKeys = get_variable_keys
+    hasVariations = has_variations
     getFeature = get_feature
     addModule = add_module
     removeModule = remove_module
@@ -314,5 +359,5 @@ class FeaturevisorInstance:
     getAllEvaluations = get_all_evaluations
 
 
-def create_instance(options: dict[str, Any] | None = None) -> FeaturevisorInstance:
-    return FeaturevisorInstance(options or {})
+def create_featurevisor(options: dict[str, Any] | None = None) -> Featurevisor:
+    return Featurevisor(options or {})

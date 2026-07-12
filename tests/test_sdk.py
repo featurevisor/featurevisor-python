@@ -7,14 +7,14 @@ from unittest.mock import patch
 
 sys.path.insert(0, "src")
 
-from featurevisor import FeaturevisorChildInstance, create_instance
+from featurevisor import FeaturevisorChildInstance, create_featurevisor
 from featurevisor.bucketer import MAX_BUCKETED_NUMBER, get_bucket_key, get_bucketed_number
 from featurevisor.compare_versions import compare_versions
 from featurevisor.conditions import condition_is_matched
 from featurevisor.datafile_reader import _DatafileReader
 from featurevisor.events import get_params_for_datafile_set_event, get_params_for_sticky_set_event
 from featurevisor.emitter import Emitter
-from featurevisor.logger import create_logger
+from featurevisor.logger import _create_logger
 
 
 class SDKTests(unittest.TestCase):
@@ -41,7 +41,7 @@ class SDKTests(unittest.TestCase):
         self.assertTrue(condition_is_matched({"attribute": "country", "operator": "notExists"}, {}, get_regex))
 
     def test_bucket_key_keeps_none_values(self) -> None:
-        logger = create_logger({"level": "fatal"})
+        logger = _create_logger({"level": "fatal"})
         bucket_key = get_bucket_key(featureKey="my_feature", bucketBy="userId", context={"userId": None}, logger=logger)
         self.assertEqual(bucket_key, "None.my_feature")
 
@@ -51,7 +51,7 @@ class SDKTests(unittest.TestCase):
         self.assertLess(value, MAX_BUCKETED_NUMBER)
 
     def test_bucket_key_variants(self) -> None:
-        logger = create_logger({"level": "fatal"})
+        logger = _create_logger({"level": "fatal"})
         self.assertEqual(get_bucket_key(featureKey="test-feature", bucketBy="userId", context={"userId": "123"}, logger=logger), "123.test-feature")
         self.assertEqual(get_bucket_key(featureKey="test-feature", bucketBy=["organizationId", "user.id"], context={"organizationId": "123", "user": {"id": "234"}}, logger=logger), "123.234.test-feature")
         self.assertEqual(get_bucket_key(featureKey="test-feature", bucketBy={"or": ["userId", "deviceId"]}, context={"deviceId": "deviceIdHere"}, logger=logger), "deviceIdHere.test-feature")
@@ -69,13 +69,13 @@ class SDKTests(unittest.TestCase):
                 }
             },
         }
-        instance = create_instance({"datafile": datafile, "context": {"userId": "123"}})
+        instance = create_featurevisor({"datafile": datafile, "context": {"userId": "123"}})
         self.assertTrue(instance.is_enabled("my_feature"))
         self.assertEqual(instance.get_variable("my_feature", "title"), "Hello")
         self.assertEqual(instance.get_all_evaluations()["my_feature"]["variables"]["title"], "Hello")
 
     def test_set_datafile_merges_by_default_and_replace_opt_in(self) -> None:
-        instance = create_instance(
+        instance = create_featurevisor(
             {
                 "datafile": {
                     "schemaVersion": "2",
@@ -119,7 +119,7 @@ class SDKTests(unittest.TestCase):
 
     def test_datafile_set_event_includes_replaced(self) -> None:
         events = []
-        instance = create_instance({"logLevel": "fatal"})
+        instance = create_featurevisor({"logLevel": "fatal"})
         instance.on("datafile_set", lambda event: events.append(event))
 
         instance.set_datafile({"schemaVersion": "2", "revision": "1", "segments": {}, "features": {}})
@@ -129,7 +129,7 @@ class SDKTests(unittest.TestCase):
 
     def test_lifecycle_mutations_report_diagnostics(self) -> None:
         diagnostics = []
-        instance = create_instance({"logLevel": "debug", "onDiagnostic": lambda diagnostic: diagnostics.append(diagnostic)})
+        instance = create_featurevisor({"logLevel": "debug", "onDiagnostic": lambda diagnostic: diagnostics.append(diagnostic)})
 
         instance.set_datafile({"schemaVersion": "2", "revision": "1", "segments": {}, "features": {}})
         instance.set_sticky({"test": {"enabled": True}})
@@ -145,7 +145,7 @@ class SDKTests(unittest.TestCase):
         errors = []
         setup_revision = {}
         closed = []
-        instance = create_instance(
+        instance = create_featurevisor(
             {
                 "logLevel": "error",
                 "onDiagnostic": lambda diagnostic: diagnostics.append(diagnostic),
@@ -170,7 +170,7 @@ class SDKTests(unittest.TestCase):
 
     def test_add_module_unsubscribe_closes_module_once(self) -> None:
         closed = []
-        instance = create_instance({"logLevel": "fatal"})
+        instance = create_featurevisor({"logLevel": "fatal"})
 
         unsubscribe = instance.add_module({"name": "dynamic", "close": lambda: closed.append("dynamic")})
 
@@ -183,7 +183,7 @@ class SDKTests(unittest.TestCase):
         diagnostics = []
         closed = []
         seen = []
-        instance = create_instance({"logLevel": "error", "onDiagnostic": lambda diagnostic: diagnostics.append(diagnostic)})
+        instance = create_featurevisor({"logLevel": "error", "onDiagnostic": lambda diagnostic: diagnostics.append(diagnostic)})
 
         def fail_setup(api):
             api["onDiagnostic"](lambda diagnostic: None)
@@ -207,7 +207,7 @@ class SDKTests(unittest.TestCase):
             closed.append("first")
             raise RuntimeError("first close failed")
 
-        instance = create_instance(
+        instance = create_featurevisor(
             {
                 "logLevel": "error",
                 "onDiagnostic": lambda diagnostic: diagnostics.append(diagnostic),
@@ -235,7 +235,7 @@ class SDKTests(unittest.TestCase):
 
     def test_module_unsubscribe_reports_close_errors_once(self) -> None:
         diagnostics = []
-        instance = create_instance({"logLevel": "error", "onDiagnostic": lambda diagnostic: diagnostics.append(diagnostic)})
+        instance = create_featurevisor({"logLevel": "error", "onDiagnostic": lambda diagnostic: diagnostics.append(diagnostic)})
 
         def fail_close() -> None:
             raise RuntimeError("dynamic close failed")
@@ -258,7 +258,7 @@ class SDKTests(unittest.TestCase):
         listener_diagnostics = []
         reporter_api = {}
         listener_closed = []
-        instance = create_instance(
+        instance = create_featurevisor(
             {
                 "onDiagnostic": lambda diagnostic: instance_diagnostics.append(diagnostic),
                 "modules": [
@@ -293,7 +293,7 @@ class SDKTests(unittest.TestCase):
                 "segments": {"eu": {"conditions": '[{"attribute":"country","operator":"equals","value":"nl"}]'}},
                 "features": {},
             },
-            logger=create_logger({"level": "fatal"}),
+            logger=_create_logger({"level": "fatal"}),
         )
         segment = reader.get_segment("eu")
         self.assertTrue(reader.segment_is_matched(segment, {"country": "nl"}))
@@ -303,7 +303,7 @@ class SDKTests(unittest.TestCase):
             get_params_for_sticky_set_event({"feature1": {"enabled": True}}, {"feature2": {"enabled": True}}, True),
             {"features": ["feature1", "feature2"], "replaced": True},
         )
-        logger = create_logger({"level": "fatal"})
+        logger = _create_logger({"level": "fatal"})
         previous = _DatafileReader(datafile={"schemaVersion": "2", "revision": "1", "segments": {}, "features": {"feature1": {"bucketBy": "userId", "hash": "hash1", "traffic": []}}}, logger=logger)
         current = _DatafileReader(datafile={"schemaVersion": "2", "revision": "2", "segments": {}, "features": {"feature1": {"bucketBy": "userId", "hash": "hash2", "traffic": []}, "feature2": {"bucketBy": "userId", "hash": "hash3", "traffic": []}}}, logger=logger)
         self.assertEqual(
@@ -345,7 +345,7 @@ class SDKTests(unittest.TestCase):
 
     def test_logger_handler_and_filtering(self) -> None:
         calls = []
-        logger = create_logger({"level": "warn", "handler": lambda level, message, details=None: calls.append((level, message, details))})
+        logger = _create_logger({"level": "warn", "handler": lambda level, message, details=None: calls.append((level, message, details))})
         logger.info("nope")
         logger.warn("yes")
         logger.error("yep")
@@ -370,7 +370,7 @@ class SDKTests(unittest.TestCase):
                 }
             },
         }
-        instance = create_instance({"datafile": datafile, "context": {"appVersion": "1.0.0"}, "logLevel": "fatal"})
+        instance = create_featurevisor({"datafile": datafile, "context": {"appVersion": "1.0.0"}, "logLevel": "fatal"})
         child = instance.spawn({"userId": "123", "country": "be"})
         changes = []
         unsubscribe = child.on("context_set", lambda details: changes.append(details))
@@ -396,7 +396,7 @@ class SDKTests(unittest.TestCase):
                 }
             },
         }
-        instance = create_instance({"datafile": datafile, "context": {"userId": "123"}, "logLevel": "fatal"})
+        instance = create_featurevisor({"datafile": datafile, "context": {"userId": "123"}, "logLevel": "fatal"})
         self.assertEqual(instance.get_variable("test", "config"), {"enabled": True})
 
 

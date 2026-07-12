@@ -6,11 +6,11 @@ from .emitter import Emitter
 from .events import get_params_for_sticky_set_event
 
 if TYPE_CHECKING:
-    from .instance import FeaturevisorInstance
+    from .instance import Featurevisor
 
 
 class FeaturevisorChildInstance:
-    def __init__(self, *, parent: "FeaturevisorInstance", context: dict[str, Any], sticky: dict[str, Any] | None = None) -> None:
+    def __init__(self, *, parent: "Featurevisor", context: dict[str, Any], sticky: dict[str, Any] | None = None) -> None:
         self.parent = parent
         self.context = context
         self.sticky = sticky or {}
