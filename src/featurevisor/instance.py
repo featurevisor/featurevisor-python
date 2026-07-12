@@ -44,7 +44,7 @@ class Featurevisor:
             {
                 "level": "info",
                 "code": "sdk_initialized",
-                "message": "Featurevisor SDK initialized",
+                "message": "SDK initialized",
             }
         )
 
@@ -83,8 +83,8 @@ class Featurevisor:
             new_reader = _DatafileReader(datafile=next_datafile, logger=self.logger)
             details = get_params_for_datafile_set_event(self.datafile_reader, new_reader, replace)
             self.datafile_reader = new_reader
-            self.emitter.trigger("datafile_set", details)
             self.report_diagnostic({"level": "info", "code": "datafile_set", "message": "Datafile set", "details": details})
+            self.emitter.trigger("datafile_set", details)
         except Exception as exc:
             self.report_diagnostic({"level": "error", "code": "invalid_datafile", "message": "Could not parse datafile", "originalError": exc})
 
@@ -311,8 +311,8 @@ class Featurevisor:
         elif self._should_report_diagnostic(diagnostic["level"], self.logger.level):
             _default_log_handler(diagnostic["level"], diagnostic.get("message", ""), diagnostic)
 
-        if diagnostic["level"] in {"error", "fatal"}:
-            self.emitter.trigger("error", diagnostic)
+        if diagnostic["level"] == "error":
+            self.emitter.trigger("error", {"diagnostic": diagnostic})
 
     def _should_report_diagnostic(self, diagnostic_level: str, subscriber_level: str) -> bool:
         try:

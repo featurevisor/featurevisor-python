@@ -163,7 +163,7 @@ class SDKTests(unittest.TestCase):
         self.assertEqual(setup_revision["revision"], "unknown")
         self.assertIsNone(instance.add_module({"name": "lifecycle"}))
         self.assertEqual(diagnostics[-1]["code"], "duplicate_module")
-        self.assertEqual(errors[-1]["code"], "duplicate_module")
+        self.assertEqual(errors[-1]["diagnostic"]["code"], "duplicate_module")
 
         instance.close()
         self.assertEqual(closed, ["lifecycle"])
@@ -231,7 +231,11 @@ class SDKTests(unittest.TestCase):
                 for diagnostic in diagnostics
             )
         )
-        self.assertTrue(any(event.get("code") == "module_close_error" and event.get("moduleName") == "first" for event in errors))
+        self.assertTrue(any(
+            event.get("diagnostic", {}).get("code") == "module_close_error"
+            and event.get("diagnostic", {}).get("moduleName") == "first"
+            for event in errors
+        ))
 
     def test_module_unsubscribe_reports_close_errors_once(self) -> None:
         diagnostics = []

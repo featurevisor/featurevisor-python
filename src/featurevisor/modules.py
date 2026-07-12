@@ -77,7 +77,7 @@ class ModulesManager:
                     "message": "Duplicate module name",
                     "moduleName": module.name,
                 },
-                module,
+                None,
             )
             return None
 

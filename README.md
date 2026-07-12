@@ -389,11 +389,11 @@ unsubscribe()
 ### `error`
 
 ```python
-unsubscribe = f.on("error", lambda diagnostic: print(diagnostic["message"]))
+unsubscribe = f.on("error", lambda event: print(event["diagnostic"]["message"]))
 unsubscribe()
 ```
 
-The `error` event is emitted for diagnostics reported with `level` set to `error` or `fatal`.
+The `error` event is emitted for diagnostics reported with `level` set to `error`.
 
 ## Evaluation details
 
