@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from .datafile_reader import DatafileReader
+from .datafile_reader import _DatafileReader
 
 
 def get_params_for_sticky_set_event(previous_sticky_features: dict | None = None, new_sticky_features: dict | None = None, replace: bool = False) -> dict:
@@ -14,7 +14,7 @@ def get_params_for_sticky_set_event(previous_sticky_features: dict | None = None
     return {"features": features, "replaced": replace}
 
 
-def get_params_for_datafile_set_event(previous_datafile_reader: DatafileReader, new_datafile_reader: DatafileReader) -> dict:
+def get_params_for_datafile_set_event(previous_datafile_reader: _DatafileReader, new_datafile_reader: _DatafileReader, replace: bool = False) -> dict:
     previous_revision = previous_datafile_reader.get_revision()
     previous_feature_keys = previous_datafile_reader.get_feature_keys()
     new_revision = new_datafile_reader.get_revision()
@@ -36,5 +36,5 @@ def get_params_for_datafile_set_event(previous_datafile_reader: DatafileReader, 
         "previousRevision": previous_revision,
         "revisionChanged": previous_revision != new_revision,
         "features": features,
+        "replaced": replace,
     }
-

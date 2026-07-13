@@ -6,15 +6,31 @@ import unittest
 
 sys.path.insert(0, "src")
 
-from featurevisor import createInstance, createLogger
-
+import featurevisor
+from featurevisor import create_featurevisor
 
 class InstanceParityTests(unittest.TestCase):
     def test_should_be_a_function(self) -> None:
-        self.assertTrue(callable(createInstance))
+        self.assertTrue(callable(create_featurevisor))
+        self.assertFalse(hasattr(featurevisor, "create_instance"))
 
-    def test_should_create_instance_with_datafile_content(self) -> None:
-        sdk = createInstance({"datafile": {"schemaVersion": "2", "revision": "1.0", "features": {}, "segments": {}}})
+    def test_root_public_surface_is_narrow(self) -> None:
+        self.assertEqual(
+            set(featurevisor.__all__),
+            {
+                "Featurevisor",
+                "FeaturevisorChildInstance",
+                "FeaturevisorModule",
+                "create_featurevisor",
+            },
+        )
+        self.assertFalse(hasattr(featurevisor, "DatafileReader"))
+        self.assertFalse(hasattr(featurevisor, "createLogger"))
+
+    def test_should_create_featurevisor_with_datafile_content(self) -> None:
+        sdk = create_featurevisor({"datafile": {"schemaVersion": "2", "revision": "1.0", "features": {}, "segments": {}}})
+        self.assertEqual(sdk.get_schema_version(), "2")
+        self.assertEqual(sdk.get_feature_keys(), [])
         self.assertTrue(callable(sdk.getVariation))
 
     def test_should_configure_plain_and_and_or_bucket_by(self) -> None:
@@ -25,7 +41,7 @@ class InstanceParityTests(unittest.TestCase):
         ]
         for _, bucket_by, context, expected_bucket in cases:
             captured = {"bucket": ""}
-            sdk = createInstance(
+            sdk = create_featurevisor(
                 {
                     "datafile": {
                         "schemaVersion": "2",
@@ -40,16 +56,16 @@ class InstanceParityTests(unittest.TestCase):
                         },
                         "segments": {},
                     },
-                    "hooks": [{"name": "unit-test", "bucketKey": lambda options, captured=captured: captured.update(bucket=options["bucketKey"]) or options["bucketKey"]}],
+                    "modules": [{"name": "unit-test", "bucketKey": lambda options, captured=captured: captured.update(bucket=options["bucketKey"]) or options["bucketKey"]}],
                     "logLevel": "fatal",
                 }
             )
             self.assertEqual(sdk.getVariation("test", context), "control")
             self.assertEqual(captured["bucket"], expected_bucket)
 
-    def test_should_intercept_before_and_after_hooks(self) -> None:
+    def test_should_intercept_before_and_after_modules(self) -> None:
         before = {"called": False, "featureKey": "", "variableKey": None}
-        sdk = createInstance(
+        sdk = create_featurevisor(
             {
                 "datafile": {
                     "schemaVersion": "2",
@@ -57,7 +73,7 @@ class InstanceParityTests(unittest.TestCase):
                     "features": {"test": {"key": "test", "bucketBy": "userId", "variations": [{"value": "control"}, {"value": "treatment"}], "traffic": [{"key": "1", "segments": "*", "percentage": 100000, "allocation": [{"variation": "control", "range": [0, 100000]}, {"variation": "treatment", "range": [0, 0]}]}]}},
                     "segments": {},
                 },
-                "hooks": [
+                "modules": [
                     {"name": "before", "before": lambda options: before.update(called=True, featureKey=options["featureKey"], variableKey=options.get("variableKey")) or options},
                     {"name": "after", "after": lambda evaluation, options: {**evaluation, "variationValue": "control_intercepted"}},
                 ],
@@ -83,7 +99,7 @@ class InstanceParityTests(unittest.TestCase):
             },
             "segments": {},
         }
-        sdk = createInstance({"sticky": {"test": {"enabled": True, "variation": "control", "variables": {"color": "red"}}}, "logLevel": "fatal"})
+        sdk = create_featurevisor({"sticky": {"test": {"enabled": True, "variation": "control", "variables": {"color": "red"}}}, "logLevel": "fatal"})
         self.assertEqual(sdk.getVariation("test", {"userId": "123"}), "control")
         self.assertEqual(sdk.getVariable("test", "color", {"userId": "123"}), "red")
         sdk.setDatafile(datafile)
@@ -93,8 +109,8 @@ class InstanceParityTests(unittest.TestCase):
         self.assertEqual(sdk.getVariation("test", {"userId": "123"}), "treatment")
 
     def test_required_deprecated_and_rule_override_cases(self) -> None:
-        logger_calls = []
-        sdk = createInstance(
+        diagnostics = []
+        sdk = create_featurevisor(
             {
                 "datafile": {
                     "schemaVersion": "2",
@@ -107,20 +123,20 @@ class InstanceParityTests(unittest.TestCase):
                     },
                     "segments": {"netherlands": {"key": "netherlands", "conditions": '[{"attribute":"country","operator":"equals","value":"nl"}]'}},
                 },
-                "logger": createLogger({"handler": lambda level, message, details=None: logger_calls.append((level, message))}),
+                "onDiagnostic": diagnostics.append,
             }
         )
         self.assertTrue(sdk.isEnabled("myKey"))
         self.assertEqual(sdk.getVariation("deprecatedTest", {"userId": "123"}), "control")
-        self.assertTrue(any(level == "warn" and "deprecated" in message for level, message in logger_calls))
+        self.assertTrue(any(diagnostic["code"] == "deprecated_feature" for diagnostic in diagnostics))
         self.assertTrue(sdk.isEnabled("flagOverride", {"userId": "user-123", "country": "de"}))
         self.assertFalse(sdk.isEnabled("flagOverride", {"userId": "user-123", "country": "nl"}))
 
     def test_mutually_exclusive_variation_and_variable_cases(self) -> None:
         bucket = {"value": 10000}
-        sdk = createInstance(
+        sdk = create_featurevisor(
             {
-                "hooks": [{"name": "unit-test", "bucketValue": lambda options, bucket=bucket: bucket["value"]}],
+                "modules": [{"name": "unit-test", "bucketValue": lambda options, bucket=bucket: bucket["value"]}],
                 "datafile": {
                     "schemaVersion": "2",
                     "revision": "1.0",
@@ -180,7 +196,7 @@ class InstanceParityTests(unittest.TestCase):
         self.assertEqual(all_evaluations["test"]["variation"], "treatment")
 
     def test_variables_without_variations_rule_overrides_arrays_objects_and_individual_segments(self) -> None:
-        sdk = createInstance(
+        sdk = create_featurevisor(
             {
                 "datafile": {
                     "schemaVersion": "2",

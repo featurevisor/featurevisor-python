@@ -5,15 +5,16 @@ import re
 from typing import Any
 
 from .conditions import condition_is_matched
-from .logger import Logger
+from .logger import _Logger
 from .types import Context, DatafileContent, Feature, Force, Segment, Traffic
 
 
-class DatafileReader:
-    def __init__(self, *, datafile: DatafileContent, logger: Logger) -> None:
+class _DatafileReader:
+    def __init__(self, *, datafile: DatafileContent, logger: _Logger) -> None:
         self.logger = logger
         self.schema_version = datafile["schemaVersion"]
         self.revision = datafile["revision"]
+        self.featurevisor_version = datafile.get("featurevisorVersion")
         self.segments = datafile.get("segments", {})
         self.features = datafile.get("features", {})
         self.regex_cache: dict[str, re.Pattern[str]] = {}
@@ -23,6 +24,16 @@ class DatafileReader:
 
     def get_schema_version(self) -> str:
         return self.schema_version
+
+    def get_datafile(self) -> dict[str, Any]:
+        datafile = {
+            "schemaVersion": self.schema_version,
+            "revision": self.revision,
+            "featurevisorVersion": self.featurevisor_version,
+            "segments": self.segments,
+            "features": self.features,
+        }
+        return {key: value for key, value in datafile.items() if value is not None}
 
     def get_segment(self, segment_key: str) -> Segment | None:
         segment = self.segments.get(segment_key)
@@ -69,7 +80,7 @@ class DatafileReader:
         if isinstance(conditions, dict) and isinstance(conditions.get("or"), list):
             return any(self.all_conditions_are_matched(item, context) for item in conditions["or"])
         if isinstance(conditions, dict) and isinstance(conditions.get("not"), list):
-            return all(not self.all_conditions_are_matched({"and": conditions["not"]}, context) for _ in conditions["not"])
+            return not self.all_conditions_are_matched({"and": conditions["not"]}, context)
         if isinstance(conditions, list):
             return all(self.all_conditions_are_matched(item, context) for item in conditions)
         return False
@@ -88,7 +99,7 @@ class DatafileReader:
         if isinstance(group_segments, dict) and isinstance(group_segments.get("or"), list):
             return any(self.all_segments_are_matched(item, context) for item in group_segments["or"])
         if isinstance(group_segments, dict) and isinstance(group_segments.get("not"), list):
-            return all(not self.all_segments_are_matched(item, context) for item in group_segments["not"])
+            return not self.all_segments_are_matched({"and": group_segments["not"]}, context)
         if isinstance(group_segments, list):
             return all(self.all_segments_are_matched(item, context) for item in group_segments)
         return False
@@ -137,6 +148,7 @@ class DatafileReader:
 
     getRevision = get_revision
     getSchemaVersion = get_schema_version
+    getDatafile = get_datafile
     getSegment = get_segment
     getFeatureKeys = get_feature_keys
     getFeature = get_feature
@@ -151,4 +163,3 @@ class DatafileReader:
     getMatchedForce = get_matched_force
     parseConditionsIfStringified = parse_conditions_if_stringified
     parseSegmentsIfStringified = parse_segments_if_stringified
-

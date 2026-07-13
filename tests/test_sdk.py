@@ -7,12 +7,14 @@ from unittest.mock import patch
 
 sys.path.insert(0, "src")
 
-from featurevisor import DatafileReader, Emitter, FeaturevisorChildInstance, create_instance
+from featurevisor import FeaturevisorChildInstance, create_featurevisor
 from featurevisor.bucketer import MAX_BUCKETED_NUMBER, get_bucket_key, get_bucketed_number
 from featurevisor.compare_versions import compare_versions
 from featurevisor.conditions import condition_is_matched
+from featurevisor.datafile_reader import _DatafileReader
 from featurevisor.events import get_params_for_datafile_set_event, get_params_for_sticky_set_event
-from featurevisor.logger import create_logger
+from featurevisor.emitter import Emitter
+from featurevisor.logger import _create_logger
 
 
 class SDKTests(unittest.TestCase):
@@ -39,7 +41,7 @@ class SDKTests(unittest.TestCase):
         self.assertTrue(condition_is_matched({"attribute": "country", "operator": "notExists"}, {}, get_regex))
 
     def test_bucket_key_keeps_none_values(self) -> None:
-        logger = create_logger({"level": "fatal"})
+        logger = _create_logger({"level": "fatal"})
         bucket_key = get_bucket_key(featureKey="my_feature", bucketBy="userId", context={"userId": None}, logger=logger)
         self.assertEqual(bucket_key, "None.my_feature")
 
@@ -49,7 +51,7 @@ class SDKTests(unittest.TestCase):
         self.assertLess(value, MAX_BUCKETED_NUMBER)
 
     def test_bucket_key_variants(self) -> None:
-        logger = create_logger({"level": "fatal"})
+        logger = _create_logger({"level": "fatal"})
         self.assertEqual(get_bucket_key(featureKey="test-feature", bucketBy="userId", context={"userId": "123"}, logger=logger), "123.test-feature")
         self.assertEqual(get_bucket_key(featureKey="test-feature", bucketBy=["organizationId", "user.id"], context={"organizationId": "123", "user": {"id": "234"}}, logger=logger), "123.234.test-feature")
         self.assertEqual(get_bucket_key(featureKey="test-feature", bucketBy={"or": ["userId", "deviceId"]}, context={"deviceId": "deviceIdHere"}, logger=logger), "deviceIdHere.test-feature")
@@ -67,20 +69,235 @@ class SDKTests(unittest.TestCase):
                 }
             },
         }
-        instance = create_instance({"datafile": datafile, "context": {"userId": "123"}})
+        instance = create_featurevisor({"datafile": datafile, "context": {"userId": "123"}})
         self.assertTrue(instance.is_enabled("my_feature"))
         self.assertEqual(instance.get_variable("my_feature", "title"), "Hello")
         self.assertEqual(instance.get_all_evaluations()["my_feature"]["variables"]["title"], "Hello")
 
+    def test_set_datafile_merges_by_default_and_replace_opt_in(self) -> None:
+        instance = create_featurevisor(
+            {
+                "datafile": {
+                    "schemaVersion": "2",
+                    "revision": "1",
+                    "featurevisorVersion": "3.0.0",
+                    "segments": {},
+                    "features": {"first": {"bucketBy": "userId", "traffic": [{"key": "1", "segments": "*", "percentage": 100000}]}},
+                },
+                "logLevel": "fatal",
+            }
+        )
+
+        instance.set_datafile(
+            {
+                "schemaVersion": "2",
+                "revision": "2",
+                "featurevisorVersion": "3.1.0",
+                "segments": {},
+                "features": {"second": {"bucketBy": "userId", "traffic": [{"key": "1", "segments": "*", "percentage": 100000}]}},
+            }
+        )
+
+        self.assertEqual(instance.get_revision(), "2")
+        self.assertEqual(instance.datafile_reader.featurevisor_version, "3.1.0")
+        self.assertIsNotNone(instance.get_feature("first"))
+        self.assertIsNotNone(instance.get_feature("second"))
+
+        instance.set_datafile(
+            {
+                "schemaVersion": "2",
+                "revision": "3",
+                "segments": {},
+                "features": {"third": {"bucketBy": "userId", "traffic": [{"key": "1", "segments": "*", "percentage": 100000}]}},
+            },
+            True,
+        )
+
+        self.assertIsNone(instance.get_feature("first"))
+        self.assertIsNone(instance.get_feature("second"))
+        self.assertIsNotNone(instance.get_feature("third"))
+
+    def test_datafile_set_event_includes_replaced(self) -> None:
+        events = []
+        instance = create_featurevisor({"logLevel": "fatal"})
+        instance.on("datafile_set", lambda event: events.append(event))
+
+        instance.set_datafile({"schemaVersion": "2", "revision": "1", "segments": {}, "features": {}})
+        instance.set_datafile({"schemaVersion": "2", "revision": "2", "segments": {}, "features": {}}, True)
+
+        self.assertEqual([event["replaced"] for event in events], [False, True])
+
+    def test_lifecycle_mutations_report_diagnostics(self) -> None:
+        diagnostics = []
+        instance = create_featurevisor({"logLevel": "debug", "onDiagnostic": lambda diagnostic: diagnostics.append(diagnostic)})
+
+        instance.set_datafile({"schemaVersion": "2", "revision": "1", "segments": {}, "features": {}})
+        instance.set_sticky({"test": {"enabled": True}})
+        instance.set_context({"country": "nl"})
+
+        codes = [diagnostic["code"] for diagnostic in diagnostics]
+        self.assertIn("datafile_set", codes)
+        self.assertIn("sticky_set", codes)
+        self.assertIn("context_set", codes)
+
+    def test_module_lifecycle_duplicate_diagnostics_and_close(self) -> None:
+        diagnostics = []
+        errors = []
+        setup_revision = {}
+        closed = []
+        instance = create_featurevisor(
+            {
+                "logLevel": "error",
+                "onDiagnostic": lambda diagnostic: diagnostics.append(diagnostic),
+                "modules": [
+                    {
+                        "name": "lifecycle",
+                        "setup": lambda api: setup_revision.update(revision=api["getRevision"]()),
+                        "close": lambda: closed.append("lifecycle"),
+                    }
+                ],
+            }
+        )
+        instance.on("error", lambda event: errors.append(event))
+
+        self.assertEqual(setup_revision["revision"], "unknown")
+        self.assertIsNone(instance.add_module({"name": "lifecycle"}))
+        self.assertEqual(diagnostics[-1]["code"], "duplicate_module")
+        self.assertEqual(errors[-1]["diagnostic"]["code"], "duplicate_module")
+
+        instance.close()
+        self.assertEqual(closed, ["lifecycle"])
+
+    def test_add_module_unsubscribe_closes_module_once(self) -> None:
+        closed = []
+        instance = create_featurevisor({"logLevel": "fatal"})
+
+        unsubscribe = instance.add_module({"name": "dynamic", "close": lambda: closed.append("dynamic")})
+
+        unsubscribe()
+        unsubscribe()
+
+        self.assertEqual(closed, ["dynamic"])
+
+    def test_module_setup_and_diagnostic_handler_failures_are_isolated(self) -> None:
+        diagnostics = []
+        closed = []
+        seen = []
+        instance = create_featurevisor({"logLevel": "error", "onDiagnostic": lambda diagnostic: diagnostics.append(diagnostic)})
+
+        def fail_setup(api):
+            api["onDiagnostic"](lambda diagnostic: None)
+            raise RuntimeError("setup failed")
+
+        self.assertIsNone(instance.add_module({"name": "broken-setup", "setup": fail_setup, "close": lambda: closed.append("broken-setup")}))
+        self.assertEqual(closed, ["broken-setup"])
+        self.assertTrue(any(item.get("code") == "module_setup_error" for item in diagnostics))
+
+        instance.add_module({"name": "broken-handler", "setup": lambda api: api["onDiagnostic"](lambda diagnostic: (_ for _ in ()).throw(RuntimeError("handler failed")), {"logLevel": "debug"})})
+        instance.add_module({"name": "working-handler", "setup": lambda api: api["onDiagnostic"](lambda diagnostic: seen.append(diagnostic["code"]), {"logLevel": "debug"})})
+        instance.set_context({"country": "nl"})
+        self.assertIn("context_set", seen)
+
+    def test_module_close_errors_are_reported_and_do_not_stop_cleanup(self) -> None:
+        diagnostics = []
+        errors = []
+        closed = []
+
+        def fail_close() -> None:
+            closed.append("first")
+            raise RuntimeError("first close failed")
+
+        instance = create_featurevisor(
+            {
+                "logLevel": "error",
+                "onDiagnostic": lambda diagnostic: diagnostics.append(diagnostic),
+                "modules": [
+                    {"name": "first", "close": fail_close},
+                    {"name": "second", "close": lambda: closed.append("second")},
+                ],
+            }
+        )
+        instance.on("error", lambda event: errors.append(event))
+
+        instance.close()
+
+        self.assertEqual(closed, ["first", "second"])
+        self.assertTrue(
+            any(
+                diagnostic.get("code") == "module_close_error"
+                and diagnostic.get("moduleName") == "first"
+                and diagnostic.get("level") == "error"
+                and isinstance(diagnostic.get("originalError"), RuntimeError)
+                for diagnostic in diagnostics
+            )
+        )
+        self.assertTrue(any(
+            event.get("diagnostic", {}).get("code") == "module_close_error"
+            and event.get("diagnostic", {}).get("moduleName") == "first"
+            for event in errors
+        ))
+
+    def test_module_unsubscribe_reports_close_errors_once(self) -> None:
+        diagnostics = []
+        instance = create_featurevisor({"logLevel": "error", "onDiagnostic": lambda diagnostic: diagnostics.append(diagnostic)})
+
+        def fail_close() -> None:
+            raise RuntimeError("dynamic close failed")
+
+        unsubscribe = instance.add_module({"name": "dynamic", "close": fail_close})
+        unsubscribe()
+        unsubscribe()
+
+        self.assertEqual(
+            1,
+            sum(
+                1
+                for diagnostic in diagnostics
+                if diagnostic.get("code") == "module_close_error" and diagnostic.get("moduleName") == "dynamic"
+            ),
+        )
+
+    def test_module_diagnostic_subscribe_report_and_remove_cleanup(self) -> None:
+        instance_diagnostics = []
+        listener_diagnostics = []
+        reporter_api = {}
+        listener_closed = []
+        instance = create_featurevisor(
+            {
+                "onDiagnostic": lambda diagnostic: instance_diagnostics.append(diagnostic),
+                "modules": [
+                    {
+                        "name": "listener",
+                        "setup": lambda api: api["onDiagnostic"](lambda diagnostic: listener_diagnostics.append(diagnostic)),
+                        "close": lambda: listener_closed.append(True),
+                    },
+                    {
+                        "name": "reporter",
+                        "setup": lambda api: reporter_api.update(api=api),
+                    },
+                ],
+            }
+        )
+
+        reporter_api["api"]["reportDiagnostic"]({"level": "warn", "code": "module_warning", "message": "module warning"})
+        self.assertEqual(instance_diagnostics[-1]["module"], "reporter")
+        self.assertEqual(listener_diagnostics[-1]["code"], "module_warning")
+
+        instance.remove_module("listener")
+        reporter_api["api"]["reportDiagnostic"]({"level": "warn", "code": "after_remove", "message": "after remove"})
+        self.assertEqual(instance_diagnostics[-1]["code"], "after_remove")
+        self.assertEqual(listener_diagnostics[-1]["code"], "module_warning")
+        self.assertEqual(listener_closed, [True])
+
     def test_datafile_reader_parses_stringified_conditions(self) -> None:
-        reader = DatafileReader(
+        reader = _DatafileReader(
             datafile={
                 "schemaVersion": "2",
                 "revision": "1",
                 "segments": {"eu": {"conditions": '[{"attribute":"country","operator":"equals","value":"nl"}]'}},
                 "features": {},
             },
-            logger=create_logger({"level": "fatal"}),
+            logger=_create_logger({"level": "fatal"}),
         )
         segment = reader.get_segment("eu")
         self.assertTrue(reader.segment_is_matched(segment, {"country": "nl"}))
@@ -90,12 +307,12 @@ class SDKTests(unittest.TestCase):
             get_params_for_sticky_set_event({"feature1": {"enabled": True}}, {"feature2": {"enabled": True}}, True),
             {"features": ["feature1", "feature2"], "replaced": True},
         )
-        logger = create_logger({"level": "fatal"})
-        previous = DatafileReader(datafile={"schemaVersion": "2", "revision": "1", "segments": {}, "features": {"feature1": {"bucketBy": "userId", "hash": "hash1", "traffic": []}}}, logger=logger)
-        current = DatafileReader(datafile={"schemaVersion": "2", "revision": "2", "segments": {}, "features": {"feature1": {"bucketBy": "userId", "hash": "hash2", "traffic": []}, "feature2": {"bucketBy": "userId", "hash": "hash3", "traffic": []}}}, logger=logger)
+        logger = _create_logger({"level": "fatal"})
+        previous = _DatafileReader(datafile={"schemaVersion": "2", "revision": "1", "segments": {}, "features": {"feature1": {"bucketBy": "userId", "hash": "hash1", "traffic": []}}}, logger=logger)
+        current = _DatafileReader(datafile={"schemaVersion": "2", "revision": "2", "segments": {}, "features": {"feature1": {"bucketBy": "userId", "hash": "hash2", "traffic": []}, "feature2": {"bucketBy": "userId", "hash": "hash3", "traffic": []}}}, logger=logger)
         self.assertEqual(
             get_params_for_datafile_set_event(previous, current),
-            {"revision": "2", "previousRevision": "1", "revisionChanged": True, "features": ["feature1", "feature2"]},
+            {"revision": "2", "previousRevision": "1", "revisionChanged": True, "features": ["feature1", "feature2"], "replaced": False},
         )
 
     def test_emitter_subscribe_unsubscribe(self) -> None:
@@ -110,9 +327,29 @@ class SDKTests(unittest.TestCase):
         emitter.clear_all()
         self.assertEqual(dict(emitter.listeners), {})
 
+    def test_emitter_uses_listener_snapshot(self) -> None:
+        emitter = Emitter()
+        calls = []
+        unsubscribe_second = None
+
+        def first(_details: dict) -> None:
+            calls.append("first")
+            unsubscribe_second()
+
+        def second(_details: dict) -> None:
+            calls.append("second")
+
+        emitter.on("sticky_set", first)
+        unsubscribe_second = emitter.on("sticky_set", second)
+
+        emitter.trigger("sticky_set")
+        emitter.trigger("sticky_set")
+
+        self.assertEqual(calls, ["first", "second", "first"])
+
     def test_logger_handler_and_filtering(self) -> None:
         calls = []
-        logger = create_logger({"level": "warn", "handler": lambda level, message, details=None: calls.append((level, message, details))})
+        logger = _create_logger({"level": "warn", "handler": lambda level, message, details=None: calls.append((level, message, details))})
         logger.info("nope")
         logger.warn("yes")
         logger.error("yep")
@@ -137,7 +374,7 @@ class SDKTests(unittest.TestCase):
                 }
             },
         }
-        instance = create_instance({"datafile": datafile, "context": {"appVersion": "1.0.0"}, "logLevel": "fatal"})
+        instance = create_featurevisor({"datafile": datafile, "context": {"appVersion": "1.0.0"}, "logLevel": "fatal"})
         child = instance.spawn({"userId": "123", "country": "be"})
         changes = []
         unsubscribe = child.on("context_set", lambda details: changes.append(details))
@@ -163,7 +400,7 @@ class SDKTests(unittest.TestCase):
                 }
             },
         }
-        instance = create_instance({"datafile": datafile, "context": {"userId": "123"}, "logLevel": "fatal"})
+        instance = create_featurevisor({"datafile": datafile, "context": {"userId": "123"}, "logLevel": "fatal"})
         self.assertEqual(instance.get_variable("test", "config"), {"enabled": True})
 
 

@@ -4,22 +4,22 @@ from typing import Any, Callable
 
 from .types import LogLevel
 
-LogHandler = Callable[[LogLevel, str, dict[str, Any] | None], None]
+_LogHandler = Callable[[LogLevel, str, dict[str, Any] | None], None]
 
 loggerPrefix = "[Featurevisor]"
 
 
-def default_log_handler(level: LogLevel, message: str, details: dict[str, Any] | None = None) -> None:
+def _default_log_handler(level: LogLevel, message: str, details: dict[str, Any] | None = None) -> None:
     print(loggerPrefix, message, details or {})
 
 
-class Logger:
+class _Logger:
     all_levels: list[LogLevel] = ["fatal", "error", "warn", "info", "debug"]
     default_level: LogLevel = "info"
 
-    def __init__(self, level: LogLevel | None = None, handler: LogHandler | None = None) -> None:
+    def __init__(self, level: LogLevel | None = None, handler: _LogHandler | None = None) -> None:
         self.level = level or self.default_level
-        self.handle = handler or default_log_handler
+        self.handle = handler or _default_log_handler
 
     def set_level(self, level: LogLevel) -> None:
         self.level = level
@@ -44,7 +44,6 @@ class Logger:
     setLevel = set_level
 
 
-def create_logger(options: dict[str, Any] | None = None) -> Logger:
+def _create_logger(options: dict[str, Any] | None = None) -> _Logger:
     options = options or {}
-    return Logger(level=options.get("level"), handler=options.get("handler"))
-
+    return _Logger(level=options.get("level"), handler=options.get("handler"))

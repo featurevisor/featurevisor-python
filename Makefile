@@ -31,4 +31,5 @@ test:
 
 .PHONY: test-example-1
 test-example-1:
-	PYTHONPATH=src python3 -m featurevisor test --projectDirectoryPath=./monorepo/examples/example-1
+	PYTHONPATH=src python3 -m unittest discover -s tests -v
+	PYTHONPATH=src python3 -m featurevisor test --projectDirectoryPath=../featurevisor/examples/example-1 --onlyFailures

@@ -6,11 +6,11 @@ from .emitter import Emitter
 from .events import get_params_for_sticky_set_event
 
 if TYPE_CHECKING:
-    from .instance import FeaturevisorInstance
+    from .instance import Featurevisor
 
 
 class FeaturevisorChildInstance:
-    def __init__(self, *, parent: "FeaturevisorInstance", context: dict[str, Any], sticky: dict[str, Any] | None = None) -> None:
+    def __init__(self, *, parent: "Featurevisor", context: dict[str, Any], sticky: dict[str, Any] | None = None) -> None:
         self.parent = parent
         self.context = context
         self.sticky = sticky or {}
@@ -40,7 +40,10 @@ class FeaturevisorChildInstance:
         return {**self.context, **(context or {})}
 
     def _merge_options(self, options: dict[str, Any] | None) -> dict[str, Any]:
-        return {"sticky": self.sticky, **(options or {})}
+        # Sticky assignments belong to an instance. This private value carries
+        # this child instance's state to its parent without exposing a
+        # per-evaluation sticky override in the public options API.
+        return {**(options or {}), "__featurevisor_child_sticky": self.sticky}
 
     def is_enabled(self, feature_key: str, context: dict[str, Any] | None = None, options: dict[str, Any] | None = None) -> bool:
         return self.parent.is_enabled(feature_key, self._merge_context(context), self._merge_options(options))
@@ -97,4 +100,3 @@ class FeaturevisorChildInstance:
     evaluateFlag = evaluate_flag
     evaluateVariation = evaluate_variation
     evaluateVariable = evaluate_variable
-
