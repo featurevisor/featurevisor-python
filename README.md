@@ -44,6 +44,7 @@ This SDK is compatible with Featurevisor v3 projects and v2 datafiles.
   - [Registering modules](#registering-modules)
 - [Child instance](#child-instance)
 - [Close](#close)
+- [OpenFeature](#openfeature)
 - [CLI usage](#cli-usage)
   - [Test](#test)
   - [Benchmark](#benchmark)
@@ -579,6 +580,47 @@ python -m featurevisor assess-distribution \
   --populateUuid=userId \
   --populateUuid=deviceId
 ```
+
+## OpenFeature
+
+Install Featurevisor with its optional OpenFeature dependency:
+
+```bash
+pip install "featurevisor[openfeature]"
+```
+
+```python
+from featurevisor.openfeature import FeaturevisorOpenFeatureProvider
+from openfeature import api
+from openfeature.evaluation_context import EvaluationContext
+
+provider = FeaturevisorOpenFeatureProvider({"datafile": datafile_content})
+api.set_provider(provider)
+
+client = api.get_client()
+enabled = client.get_boolean_value(
+    "checkout",
+    False,
+    EvaluationContext(targeting_key="user-123", attributes={"country": "nl"}),
+)
+```
+
+Use `checkout` for a flag, `checkout:variation` for its variation, and `checkout:title` for its `title` variable. Boolean variables use the boolean resolver. Sequences, mappings, and JSON variables use the object resolver.
+
+OpenFeature's targeting key maps to `userId` by default. `targeting_key_field`, `key_separator`, and `variation_key` can customize the mapping.
+
+You can also reuse an existing Featurevisor instance:
+
+```python
+from featurevisor import create_featurevisor
+
+featurevisor = create_featurevisor({"datafile": datafile_content})
+provider = FeaturevisorOpenFeatureProvider(featurevisor=featurevisor)
+```
+
+The caller owns an instance passed this way. Provider shutdown does not close it. Call `featurevisor.close()` when every consumer is finished with it. When the provider creates the instance from options, the provider owns and closes it. If both are supplied, `featurevisor` takes precedence over the options dictionary.
+
+See the [OpenFeature provider guide](https://featurevisor.com/docs/sdks/openfeature/) for resolution reasons, errors, metadata, tracking, lifecycle, and providers for other languages.
 
 <!-- FEATUREVISOR_DOCS_END -->
 

@@ -25,9 +25,12 @@ setup-golang-sdk:
 update-golang-sdk:
 	(cd featurevisor-go && git pull origin main)
 
-.PHONY: test
+.PHONY: test test-openfeature
 test:
 	PYTHONPATH=src python3 -m unittest discover -s tests -v
+
+test-openfeature:
+	PYTHONPATH=src python3 -m unittest discover -s tests_openfeature -v
 
 .PHONY: test-example-1
 test-example-1:
