@@ -45,11 +45,12 @@ class FeaturevisorProject:
     def list_targets(self) -> list[str]:
         targets = self.run_json("list", "--targets", "--json")
         if isinstance(targets, list):
-            return [
-                (target.get("name") or target.get("key")) if isinstance(target, dict) else target
-                for target in targets
-                if ((target.get("name") or target.get("key")) if isinstance(target, dict) else target)
-            ]
+            result: list[str] = []
+            for target in targets:
+                value = (target.get("name") or target.get("key")) if isinstance(target, dict) else target
+                if isinstance(value, str) and value:
+                    result.append(value)
+            return result
         if isinstance(targets, dict):
             return list(targets.keys())
         return []

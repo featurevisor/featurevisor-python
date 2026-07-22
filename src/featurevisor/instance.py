@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import uuid
-from typing import Any
+from typing import Any, cast
 
 from .child import FeaturevisorChildInstance
 from .datafile_reader import _DatafileReader
@@ -12,8 +12,9 @@ from .events import get_params_for_datafile_set_event, get_params_for_sticky_set
 from .helpers import get_value_by_type
 from .logger import _Logger, _create_logger, _default_log_handler
 from .modules import FeaturevisorModule, ModulesManager
+from .types import DatafileContent, LogLevel
 
-empty_datafile = {"schemaVersion": "2", "revision": "unknown", "segments": {}, "features": {}}
+empty_datafile: DatafileContent = {"schemaVersion": "2", "revision": "unknown", "segments": {}, "features": {}}
 
 
 class Featurevisor:
@@ -48,7 +49,7 @@ class Featurevisor:
             }
         )
 
-    def set_log_level(self, level: str) -> None:
+    def set_log_level(self, level: LogLevel) -> None:
         self.logger.set_level(level)
 
     def _handle_internal_log(self, level: str, message: str, details: dict[str, Any] | None = None) -> None:
@@ -88,7 +89,7 @@ class Featurevisor:
             ):
                 raise ValueError("Invalid datafile")
             next_datafile = parsed if replace else self._merge_datafiles(self.datafile_reader.get_datafile(), parsed)
-            new_reader = _DatafileReader(datafile=next_datafile, logger=self.logger)
+            new_reader = _DatafileReader(datafile=cast(DatafileContent, next_datafile), logger=self.logger)
             details = get_params_for_datafile_set_event(self.datafile_reader, new_reader, replace)
             self.datafile_reader = new_reader
             self.report_diagnostic({"level": "info", "code": "datafile_set", "message": "Datafile set", "details": details})
@@ -242,7 +243,7 @@ class Featurevisor:
         result: dict[str, Any] = {}
         keys = feature_keys or self.datafile_reader.get_feature_keys()
         for feature_key in keys:
-            evaluated = {"enabled": self.is_enabled(feature_key, context or {}, options)}
+            evaluated: dict[str, Any] = {"enabled": self.is_enabled(feature_key, context or {}, options)}
             if self.datafile_reader.has_variations(feature_key):
                 variation = self.get_variation(feature_key, context or {}, options)
                 if variation is not None:
@@ -322,7 +323,7 @@ class Featurevisor:
         if diagnostic["level"] == "error":
             self.emitter.trigger("error", {"diagnostic": diagnostic})
 
-    def _should_report_diagnostic(self, diagnostic_level: str, subscriber_level: str) -> bool:
+    def _should_report_diagnostic(self, diagnostic_level: LogLevel, subscriber_level: LogLevel) -> bool:
         try:
             return _Logger.all_levels.index(subscriber_level) >= _Logger.all_levels.index(diagnostic_level)
         except ValueError:

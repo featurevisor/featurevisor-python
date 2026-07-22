@@ -1,6 +1,12 @@
 from __future__ import annotations
 
-from typing import Any, Callable, Literal, NotRequired, TypedDict
+import sys
+from typing import Any, Callable, Literal, TypedDict
+
+if sys.version_info >= (3, 11):
+    from typing import NotRequired
+else:
+    from typing_extensions import NotRequired
 
 AttributeValue = Any
 VariableValue = Any
@@ -99,7 +105,7 @@ class Segment(TypedDict, total=False):
 
 
 class DatafileContent(TypedDict):
-    schema_version: str
+    schemaVersion: str
     revision: str
     featurevisorVersion: NotRequired[str]
     segments: dict[SegmentKey, Segment]
