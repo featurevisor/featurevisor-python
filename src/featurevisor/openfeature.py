@@ -3,15 +3,23 @@ from __future__ import annotations
 import json
 import math
 from collections.abc import Mapping, Sequence
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Callable
 
-from openfeature.evaluation_context import EvaluationContext
-from openfeature.exception import ErrorCode
-from openfeature.flag_evaluation import FlagResolutionDetails, Reason
-from openfeature.provider import AbstractProvider
-from openfeature.provider.metadata import Metadata
-from openfeature.track import TrackingEventDetails
+try:
+    from openfeature.evaluation_context import EvaluationContext
+    from openfeature.exception import ErrorCode
+    from openfeature.flag_evaluation import FlagResolutionDetails, Reason
+    from openfeature.provider import AbstractProvider
+    from openfeature.provider.metadata import Metadata
+    from openfeature.track import TrackingEventDetails
+except ModuleNotFoundError as exc:
+    if exc.name == "openfeature":
+        raise ModuleNotFoundError(
+            'Featurevisor OpenFeature support requires the optional dependency. '
+            'Install it with: pip install "featurevisor[openfeature]"'
+        ) from exc
+    raise
 
 from .instance import Featurevisor, create_featurevisor
 
@@ -96,8 +104,8 @@ class FeaturevisorOpenFeatureProvider(AbstractProvider):
         if self.datafile_error:
             return self._error(default_value, ErrorCode.PARSE_ERROR, self.datafile_error)
 
-        feature_key, separator, selector = flag_key.partition(self.key_separator)
-        selector = selector if separator else None
+        feature_key, separator, parsed_selector = flag_key.partition(self.key_separator)
+        selector: str | None = parsed_selector if separator else None
         context = self._context(evaluation_context)
 
         if not selector:
@@ -211,7 +219,11 @@ class FeaturevisorOpenFeatureProvider(AbstractProvider):
     @classmethod
     def _normalize(cls, value: Any) -> Any:
         if isinstance(value, datetime):
-            return value.isoformat()
+            # OpenFeature treats datetimes without a timezone as UTC. Match the
+            # JavaScript provider's Date.toISOString() representation so the
+            # same context behaves consistently across SDKs.
+            normalized = value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value.astimezone(timezone.utc)
+            return normalized.isoformat(timespec="milliseconds").replace("+00:00", "Z")
         if isinstance(value, Mapping):
             return {key: cls._normalize(item) for key, item in value.items()}
         if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):

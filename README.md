@@ -45,6 +45,13 @@ This SDK is compatible with Featurevisor v3 projects and v2 datafiles.
 - [Child instance](#child-instance)
 - [Close](#close)
 - [OpenFeature](#openfeature)
+  - [Installation](#installation-1)
+  - [Provider setup](#provider-setup)
+  - [Flag key mapping](#flag-key-mapping)
+  - [Context mapping](#context-mapping)
+  - [Resolution details](#resolution-details)
+  - [Tracking](#tracking)
+  - [Using an existing Featurevisor instance](#using-an-existing-featurevisor-instance)
 - [CLI usage](#cli-usage)
   - [Test](#test)
   - [Benchmark](#benchmark)
@@ -583,11 +590,17 @@ python -m featurevisor assess-distribution \
 
 ## OpenFeature
 
-Install Featurevisor with its optional OpenFeature dependency:
+The provider targets OpenFeature specification `0.8.0` through OpenFeature Python SDK `0.10.x`. OpenFeature remains optional and is not installed or imported by the base Featurevisor package.
+
+### Installation
 
 ```bash
 pip install "featurevisor[openfeature]"
 ```
+
+If the extra is not installed, importing `featurevisor.openfeature` reports the installation command needed to enable it.
+
+### Provider setup
 
 ```python
 from featurevisor.openfeature import FeaturevisorOpenFeatureProvider
@@ -595,7 +608,7 @@ from openfeature import api
 from openfeature.evaluation_context import EvaluationContext
 
 provider = FeaturevisorOpenFeatureProvider({"datafile": datafile_content})
-api.set_provider(provider)
+api.set_provider_and_wait(provider)
 
 client = api.get_client()
 enabled = client.get_boolean_value(
@@ -605,11 +618,77 @@ enabled = client.get_boolean_value(
 )
 ```
 
-Use `checkout` for a flag, `checkout:variation` for its variation, and `checkout:title` for its `title` variable. Boolean variables use the boolean resolver. Sequences, mappings, and JSON variables use the object resolver.
+Call `api.shutdown()` during application shutdown. This closes a Featurevisor instance created by the provider and releases provider subscriptions.
 
-OpenFeature's targeting key maps to `userId` by default. `targeting_key_field`, `key_separator`, and `variation_key` can customize the mapping.
+### Flag key mapping
 
-You can also reuse an existing Featurevisor instance:
+| OpenFeature key | Featurevisor evaluation |
+| --- | --- |
+| `checkout` | Boolean flag for `checkout` |
+| `checkout:variation` | Variation value for `checkout` |
+| `checkout:title` | Variable `title` for `checkout` |
+
+Boolean variables use the boolean resolver. Integer and double variables use their matching numeric resolvers. Arrays, objects, and JSON variables use the object resolver.
+
+The first separator divides the feature key from the selector. Use `key_separator` and `variation_key` when project keys require a different grammar:
+
+```python
+provider = FeaturevisorOpenFeatureProvider(
+    {"datafile": datafile_content},
+    key_separator="/",
+    variation_key="$variation",
+)
+```
+
+This makes `checkout/$variation` the variation key and `checkout/title` a variable key.
+
+### Context mapping
+
+OpenFeature's targeting key maps to `userId` by default. Use `targeting_key_field` to map it to another Featurevisor context field:
+
+```python
+provider = FeaturevisorOpenFeatureProvider(
+    {"datafile": datafile_content},
+    targeting_key_field="accountId",
+)
+```
+
+OpenFeature context attributes are copied without mutating the incoming context. Nested arrays and mappings are preserved. Datetimes are normalized to UTC ISO strings, matching the JavaScript provider.
+
+### Resolution details
+
+The provider maps Featurevisor evaluation results to OpenFeature details:
+
+| Featurevisor result | OpenFeature result |
+| --- | --- |
+| Required, forced, sticky, or rule match | `TARGETING_MATCH` |
+| Traffic allocation | `SPLIT` |
+| Disabled variation or variable | `DISABLED` |
+| No match or variable default | `DEFAULT` |
+| Missing feature, variable, or variations | `ERROR` with `FLAG_NOT_FOUND` |
+| Wrong resolver type | `ERROR` with `TYPE_MISMATCH` |
+| Invalid datafile | `ERROR` with `PARSE_ERROR` |
+| Evaluation failure | `ERROR` with `GENERAL` |
+
+Errors return the default value supplied to OpenFeature. A malformed datafile uses the stable message `Could not parse datafile`. A later successful `set_datafile` call clears the parse error.
+
+Resolution metadata can include `featureKey`, `variableKey`, `featurevisorReason`, `revision`, `schemaVersion`, `ruleKey`, `bucketKey`, `bucketValue`, `forceIndex`, and `variableOverrideIndex`. The selected variation is exposed as the OpenFeature variant when available.
+
+### Tracking
+
+Tracking is a no-op unless `on_track` is configured:
+
+```python
+def handle_track(name, context, details):
+    print(name, context, details)
+
+provider = FeaturevisorOpenFeatureProvider(
+    {"datafile": datafile_content},
+    on_track=handle_track,
+)
+```
+
+### Using an existing Featurevisor instance
 
 ```python
 from featurevisor import create_featurevisor
@@ -635,14 +714,17 @@ This repository assumes:
 Run the local test suite:
 
 ```bash
-make test
+python -m pip install -e '.[dev]'
+make check
 ```
+
+`make check` runs the base SDK tests, OpenFeature provider tests, and static type checking. You can also run them separately with `make test`, `make test-openfeature`, and `make typecheck`.
 
 Run the example project integration directly:
 
 ```bash
 PYTHONPATH=src python3 -m featurevisor test \
-  --projectDirectoryPath=/Users/fahad/Projects/featurevisor/featurevisor/examples/example-1 \
+  --projectDirectoryPath=../featurevisor/examples/example-1 \
   --onlyFailures
 ```
 

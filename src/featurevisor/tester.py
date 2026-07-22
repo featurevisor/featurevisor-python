@@ -288,7 +288,10 @@ def run_test_project(project_directory_path: str, *, key_pattern: str | None = N
 def run_benchmark(project_directory_path: str, *, environment: str, feature: str, context: dict[str, Any] | None = None, n: int = 1000, variation: bool = False, variable: str | None = None, schema_version: str | None = None, inflate: int = 0, verbose: bool = False, quiet: bool = False, targets: list[str] | None = None) -> int:
     project = FeaturevisorProject(project_directory_path)
     selected_targets = _resolve_targets(project, targets)
-    entries = selected_targets or [None]
+    entries: list[str | None] = []
+    entries.extend(selected_targets)
+    if not entries:
+        entries.append(None)
     for target in entries:
         datafile, build_duration = timed_build(project, environment=environment, inflate=inflate or None, target=target)
         _run_benchmark_datafile(datafile, build_duration, environment=environment, target=target, feature=feature, context=context, n=n, variation=variation, variable=variable, verbose=verbose, quiet=quiet)
@@ -338,7 +341,11 @@ def _run_benchmark_datafile(datafile: dict[str, Any], build_duration: float, *, 
 def run_assess_distribution(project_directory_path: str, *, environment: str, feature: str, context: dict[str, Any] | None = None, n: int = 1000, populate_uuid: list[str] | None = None, schema_version: str | None = None, inflate: int = 0, verbose: bool = False, quiet: bool = False, targets: list[str] | None = None) -> int:
     project = FeaturevisorProject(project_directory_path)
     selected_targets = _resolve_targets(project, targets)
-    for target in selected_targets or [None]:
+    entries: list[str | None] = []
+    entries.extend(selected_targets)
+    if not entries:
+        entries.append(None)
+    for target in entries:
         datafile = project.build_datafile_json(environment=environment, inflate=inflate or None, target=target)
         _run_assess_datafile(datafile, environment=environment, target=target, feature=feature, context=context, n=n, populate_uuid=populate_uuid, verbose=verbose, quiet=quiet)
     return 0

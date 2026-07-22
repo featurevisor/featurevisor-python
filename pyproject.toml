@@ -1,14 +1,18 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "featurevisor"
-version = "1.0.0"
+version = "1.1.0"
 description = "Featurevisor Python SDK"
 readme = "README.md"
 requires-python = ">=3.10"
-license = { text = "MIT" }
+dependencies = [
+  "typing-extensions>=4.1; python_version < '3.11'",
+]
+license = "MIT"
+license-files = ["LICENSE"]
 authors = [
   { name = "Fahad Heylaal" }
 ]
@@ -19,16 +23,41 @@ classifiers = [
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
   "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
+  "Typing :: Typed",
 ]
+
+[project.urls]
+Homepage = "https://featurevisor.com"
+Documentation = "https://featurevisor.com/docs/sdks/python/"
+Repository = "https://github.com/featurevisor/featurevisor-python"
+Issues = "https://github.com/featurevisor/featurevisor-python/issues"
 
 [project.scripts]
 featurevisor = "featurevisor.cli:main"
 
 [project.optional-dependencies]
 openfeature = ["openfeature-sdk>=0.10.0,<0.11"]
+dev = [
+  "build>=1.2,<2",
+  "mypy>=1.10,<2",
+  "openfeature-sdk>=0.10.0,<0.11",
+  "twine>=5,<7",
+]
 
 [tool.setuptools]
 package-dir = { "" = "src" }
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+featurevisor = ["py.typed"]
+
+[tool.mypy]
+python_version = "3.10"
+files = ["src/featurevisor"]
+check_untyped_defs = true
+no_implicit_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = true

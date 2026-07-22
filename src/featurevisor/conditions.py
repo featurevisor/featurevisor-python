@@ -36,6 +36,8 @@ def condition_is_matched(condition: dict[str, Any], context: Context, get_regex:
     operator = condition.get("operator")
     value = condition.get("value")
     regex_flags = condition.get("regexFlags", "")
+    if not isinstance(attribute, str):
+        return False
     context_value = get_value_from_context(context, attribute)
 
     if operator == "equals":
