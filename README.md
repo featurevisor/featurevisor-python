@@ -82,6 +82,8 @@ f: Featurevisor = create_featurevisor({
 
 Most applications only need `create_featurevisor` and the `Featurevisor` instance type. Public extension and observability APIs include `FeaturevisorModule`, diagnostics, events, and the datafile dictionaries accepted by the factory.
 
+Concurrent evaluations are safe after an instance is configured. Do not mutate or close the same instance concurrently with evaluations. Serialize calls to `set_datafile`, `set_context`, `set_sticky`, `add_module`, `remove_module`, and `close`. Module, event, and diagnostic callbacks must synchronize mutable state that they capture.
+
 ## Initialization
 
 Initialize the SDK with Featurevisor datafile content:
@@ -483,9 +485,14 @@ f.remove_module("my-module")
 
 ## Child instance
 
+A child snapshots the parent keys that exist when it is spawned. Child values win for those keys. Parent keys introduced later are still inherited. Calling `close()` removes both child-owned listeners and subscriptions delegated to the parent.
+
 ```python
 child = f.spawn({"country": "de"})
 child.is_enabled("my_feature")
+child.evaluate_flag("my_feature")
+child.evaluate_variation("my_feature")
+child.evaluate_variable("my_feature", "my_variable")
 ```
 
 ## Close

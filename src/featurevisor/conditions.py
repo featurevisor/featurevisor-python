@@ -10,6 +10,18 @@ from .types import AttributeValue, Context
 MISSING = object()
 
 
+def _strict_equal(left: Any, right: Any) -> bool:
+    if isinstance(left, bool) or isinstance(right, bool):
+        return isinstance(left, bool) and isinstance(right, bool) and left == right
+    if isinstance(left, (int, float)) and isinstance(right, (int, float)):
+        return left == right
+    if left is None or right is None:
+        return left is None and right is None
+    if isinstance(left, str) and isinstance(right, str):
+        return left == right
+    return False
+
+
 def get_value_from_context(obj: Context, path: str) -> AttributeValue:
     if "." not in path:
         return obj.get(path, MISSING)
@@ -23,12 +35,18 @@ def get_value_from_context(obj: Context, path: str) -> AttributeValue:
     return current
 
 
-def _to_datetime(value: Any) -> dt.datetime:
+def _to_datetime(value: Any) -> dt.datetime | None:
     if isinstance(value, dt.datetime):
-        return value
+        return value if value.tzinfo is not None else None
+    if not isinstance(value, str):
+        return None
     if isinstance(value, str) and value.endswith("Z"):
         value = value.replace("Z", "+00:00")
-    return dt.datetime.fromisoformat(str(value))
+    try:
+        parsed = dt.datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo is not None else None
 
 
 def condition_is_matched(condition: dict[str, Any], context: Context, get_regex: Callable[[str, str], re.Pattern[str]]) -> bool:
@@ -41,18 +59,24 @@ def condition_is_matched(condition: dict[str, Any], context: Context, get_regex:
     context_value = get_value_from_context(context, attribute)
 
     if operator == "equals":
-        return context_value == value
+        return _strict_equal(context_value, value)
     if operator == "notEquals":
-        return context_value != value
+        return not _strict_equal(context_value, value)
     if operator in {"before", "after"}:
         date_in_context = _to_datetime(context_value)
         date_in_condition = _to_datetime(value)
+        if date_in_context is None or date_in_condition is None:
+            return False
         return date_in_context < date_in_condition if operator == "before" else date_in_context > date_in_condition
-    if isinstance(value, list) and (isinstance(context_value, (str, int, float)) or context_value is None):
+    if isinstance(value, list) and (
+        isinstance(context_value, str)
+        or (isinstance(context_value, (int, float)) and not isinstance(context_value, bool))
+        or context_value is None
+    ):
         if operator == "in":
-            return context_value in value
+            return any(_strict_equal(context_value, candidate) for candidate in value)
         if operator == "notIn":
-            return context_value not in value
+            return not any(_strict_equal(context_value, candidate) for candidate in value)
     if isinstance(context_value, str) and isinstance(value, str):
         if operator == "contains":
             return value in context_value
@@ -78,7 +102,7 @@ def condition_is_matched(condition: dict[str, Any], context: Context, get_regex:
             return bool(get_regex(value, regex_flags).search(context_value))
         if operator == "notMatches":
             return not get_regex(value, regex_flags).search(context_value)
-    if isinstance(context_value, (int, float)) and isinstance(value, (int, float)):
+    if not isinstance(context_value, bool) and not isinstance(value, bool) and isinstance(context_value, (int, float)) and isinstance(value, (int, float)):
         if operator == "greaterThan":
             return context_value > value
         if operator == "greaterThanOrEquals":
@@ -91,9 +115,9 @@ def condition_is_matched(condition: dict[str, Any], context: Context, get_regex:
         return context_value is not MISSING
     if operator == "notExists":
         return context_value is MISSING
-    if isinstance(context_value, list) and isinstance(value, str):
+    if isinstance(context_value, list) and (isinstance(value, (str, int, float, bool)) or value is None):
         if operator == "includes":
-            return value in context_value
+            return any(_strict_equal(value, candidate) for candidate in context_value)
         if operator == "notIncludes":
-            return value not in context_value
+            return not any(_strict_equal(value, candidate) for candidate in context_value)
     return False

@@ -5,9 +5,9 @@ import time
 import uuid
 from typing import Any
 
-from .datafile_reader import _DatafileReader
+from .evaluation_data_provider import _InstanceEvaluationDataProvider
 from .instance import create_featurevisor
-from .logger import _create_logger
+from .diagnostics import _create_evaluation_diagnostics
 from .project import FeaturevisorProject, pretty_duration, timed_build
 
 
@@ -110,7 +110,7 @@ def _assert_feature(sdk, feature_key: str, assertion: dict[str, Any], datafile: 
             assertion_result["errors"].append({"type": "flag", "expected": expected, "actual": actual, "details": details_base or None})
     if "expectedVariation" in assertion:
         override_options = {}
-        if assertion.get("defaultVariationValue") is not None:
+        if "defaultVariationValue" in assertion:
             override_options["defaultVariationValue"] = assertion["defaultVariationValue"]
         actual = sdk.get_variation(feature_key, context, override_options)
         expected = assertion["expectedVariation"]
@@ -123,7 +123,7 @@ def _assert_feature(sdk, feature_key: str, assertion: dict[str, Any], datafile: 
         variables_schema = feature_from_datafile.get("variablesSchema", {})
         for variable_key, expected in assertion["expectedVariables"].items():
             override_options = {}
-            if assertion.get("defaultVariableValues", {}).get(variable_key) is not None:
+            if variable_key in assertion.get("defaultVariableValues", {}):
                 override_options["defaultVariableValue"] = assertion["defaultVariableValues"][variable_key]
             actual = sdk.get_variable(feature_key, variable_key, context, override_options)
             variable_schema = variables_schema.get(variable_key)
@@ -160,8 +160,8 @@ def _assert_feature(sdk, feature_key: str, assertion: dict[str, Any], datafile: 
 
 def test_segment(segment: dict[str, Any], assertion_options: dict[str, Any] | None = None) -> dict[str, Any]:
     options = assertion_options or {}
-    logger = _create_logger({"level": _log_level(options.get("verbose", False), options.get("quiet", False))})
-    reader = _DatafileReader(datafile={"schemaVersion": "2", "revision": "tester", "segments": {}, "features": {}}, logger=logger)
+    diagnostics = _create_evaluation_diagnostics()
+    reader = _InstanceEvaluationDataProvider(datafile={"schemaVersion": "2", "revision": "tester", "segments": {}, "features": {}}, diagnostics=diagnostics)
     result = {"type": "segment", "key": segment["segment"], "notFound": False, "passed": True, "duration": 0, "assertions": []}
     start = time.perf_counter()
     for assertion in segment["assertions"]:

@@ -6,16 +6,16 @@ import unittest
 
 sys.path.insert(0, "src")
 
-from featurevisor.datafile_reader import _DatafileReader
-from featurevisor.logger import _create_logger
+from featurevisor.evaluation_data_provider import _InstanceEvaluationDataProvider
+from featurevisor.diagnostics import _create_evaluation_diagnostics
 
 
 class ConditionsParityTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
-        cls.reader = _DatafileReader(
+        cls.reader = _InstanceEvaluationDataProvider(
             datafile={"schemaVersion": "2.0", "revision": "1", "segments": {}, "features": {}},
-            logger=_create_logger(),
+            diagnostics=_create_evaluation_diagnostics(),
         )
 
     def test_should_be_a_function(self) -> None:
@@ -33,6 +33,11 @@ class ConditionsParityTests(unittest.TestCase):
             ([{"attribute": "browser.type", "operator": "equals", "value": "chrome"}], {"browser": {"type": "firefox"}}, False),
             ([{"attribute": "browser_type", "operator": "notEquals", "value": "chrome"}], {"browser_type": "firefox"}, True),
             ([{"attribute": "browser_type", "operator": "notEquals", "value": "chrome"}], {"browser_type": "chrome"}, False),
+            ([{"attribute": "missing", "operator": "notEquals", "value": None}], {}, True),
+            ([{"attribute": "value", "operator": "equals", "value": 1.0}], {"value": 1}, True),
+            ([{"attribute": "value", "operator": "equals", "value": True}], {"value": 1}, False),
+            ([{"attribute": "value", "operator": "equals", "value": [1]}], {"value": [1]}, False),
+            ([{"attribute": "value", "operator": "equals", "value": {"a": 1}}], {"value": {"a": 1}}, False),
             ([{"attribute": "browser_type", "operator": "exists"}], {"browser_type": "firefox"}, True),
             ([{"attribute": "browser_type", "operator": "exists"}], {"not_browser_type": "chrome"}, False),
             ([{"attribute": "browser.name", "operator": "exists"}], {"browser": {"name": "chrome"}}, True),
@@ -58,6 +63,8 @@ class ConditionsParityTests(unittest.TestCase):
             ([{"attribute": "browser_type", "operator": "in", "value": ["chrome", "firefox"]}], {"browser_type": "edge"}, False),
             ([{"attribute": "browser_type", "operator": "notIn", "value": ["chrome", "firefox"]}], {"browser_type": "edge"}, True),
             ([{"attribute": "browser_type", "operator": "notIn", "value": ["chrome", "firefox"]}], {"browser_type": "chrome"}, False),
+            ([{"attribute": "enabled", "operator": "in", "value": [True]}], {"enabled": True}, False),
+            ([{"attribute": "enabled", "operator": "notIn", "value": [False]}], {"enabled": True}, False),
             ([{"attribute": "age", "operator": "greaterThan", "value": 18}], {"age": 19}, True),
             ([{"attribute": "age", "operator": "greaterThan", "value": 18}], {"age": 17}, False),
             ([{"attribute": "age", "operator": "greaterThanOrEquals", "value": 18}], {"age": 18}, True),
@@ -75,6 +82,10 @@ class ConditionsParityTests(unittest.TestCase):
             ([{"attribute": "version", "operator": "semverLessThanOrEquals", "value": "1.0.0"}], {"version": "1.1.0"}, False),
             ([{"attribute": "date", "operator": "before", "value": "2023-05-13T16:23:59Z"}], {"date": "2023-05-12T00:00:00Z"}, True),
             ([{"attribute": "date", "operator": "before", "value": "2023-05-13T16:23:59Z"}], {"date": dt.datetime.fromisoformat("2023-05-14T00:00:00+00:00")}, False),
+            ([{"attribute": "date", "operator": "before", "value": "2023-05-13T16:23:59Z"}], {"date": "2023-05-12T00:00:00"}, False),
+            ([{"attribute": "date", "operator": "before", "value": "2023-05-13T16:23:59Z"}], {"date": "2023-05-13T17:23:59+01:00"}, False),
+            ([{"attribute": "version", "operator": "semverLessThan", "value": "1.2.3"}], {"version": "1.2.3-beta.1"}, True),
+            ([{"attribute": "version", "operator": "semverEquals", "value": "1.2.3+build.9"}], {"version": "1.2.3+build.5"}, True),
             ([{"attribute": "date", "operator": "after", "value": "2023-05-13T16:23:59Z"}], {"date": "2023-05-14T00:00:00Z"}, True),
             ([{"attribute": "date", "operator": "after", "value": "2023-05-13T16:23:59Z"}], {"date": "2023-05-12T00:00:00Z"}, False),
         ]

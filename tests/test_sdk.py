@@ -11,10 +11,10 @@ from featurevisor import FeaturevisorChildInstance, create_featurevisor
 from featurevisor.bucketer import MAX_BUCKETED_NUMBER, get_bucket_key, get_bucketed_number
 from featurevisor.compare_versions import compare_versions
 from featurevisor.conditions import condition_is_matched
-from featurevisor.datafile_reader import _DatafileReader
+from featurevisor.evaluation_data_provider import _InstanceEvaluationDataProvider
 from featurevisor.events import get_params_for_datafile_set_event, get_params_for_sticky_set_event
 from featurevisor.emitter import Emitter
-from featurevisor.logger import _create_logger
+from featurevisor.diagnostics import _create_evaluation_diagnostics
 
 
 class SDKTests(unittest.TestCase):
@@ -41,9 +41,19 @@ class SDKTests(unittest.TestCase):
         self.assertTrue(condition_is_matched({"attribute": "country", "operator": "notExists"}, {}, get_regex))
 
     def test_bucket_key_keeps_none_values(self) -> None:
-        logger = _create_logger({"level": "fatal"})
-        bucket_key = get_bucket_key(featureKey="my_feature", bucketBy="userId", context={"userId": None}, logger=logger)
-        self.assertEqual(bucket_key, "None.my_feature")
+        diagnostics = _create_evaluation_diagnostics()
+        bucket_key = get_bucket_key(featureKey="my_feature", bucketBy="userId", context={"userId": None}, diagnostics=diagnostics)
+        self.assertEqual(bucket_key, ".my_feature")
+
+    def test_bucket_key_stringifies_numbers_like_javascript(self) -> None:
+        diagnostics = _create_evaluation_diagnostics()
+        bucket_key = get_bucket_key(
+            featureKey="feature",
+            bucketBy=["whole", "negativeZero", "small", "large"],
+            context={"whole": 1.0, "negativeZero": -0.0, "small": 1e-6, "large": 1e21},
+            diagnostics=diagnostics,
+        )
+        self.assertEqual(bucket_key, "1.0.0.000001.1e+21.feature")
 
     def test_bucketed_number_range(self) -> None:
         value = get_bucketed_number("foo.bar")
@@ -51,10 +61,10 @@ class SDKTests(unittest.TestCase):
         self.assertLess(value, MAX_BUCKETED_NUMBER)
 
     def test_bucket_key_variants(self) -> None:
-        logger = _create_logger({"level": "fatal"})
-        self.assertEqual(get_bucket_key(featureKey="test-feature", bucketBy="userId", context={"userId": "123"}, logger=logger), "123.test-feature")
-        self.assertEqual(get_bucket_key(featureKey="test-feature", bucketBy=["organizationId", "user.id"], context={"organizationId": "123", "user": {"id": "234"}}, logger=logger), "123.234.test-feature")
-        self.assertEqual(get_bucket_key(featureKey="test-feature", bucketBy={"or": ["userId", "deviceId"]}, context={"deviceId": "deviceIdHere"}, logger=logger), "deviceIdHere.test-feature")
+        diagnostics = _create_evaluation_diagnostics()
+        self.assertEqual(get_bucket_key(featureKey="test-feature", bucketBy="userId", context={"userId": "123"}, diagnostics=diagnostics), "123.test-feature")
+        self.assertEqual(get_bucket_key(featureKey="test-feature", bucketBy=["organizationId", "user.id"], context={"organizationId": "123", "user": {"id": "234"}}, diagnostics=diagnostics), "123.234.test-feature")
+        self.assertEqual(get_bucket_key(featureKey="test-feature", bucketBy={"or": ["userId", "deviceId"]}, context={"deviceId": "deviceIdHere"}, diagnostics=diagnostics), "deviceIdHere.test-feature")
 
     def test_instance_basic_flow(self) -> None:
         datafile = {
@@ -99,7 +109,7 @@ class SDKTests(unittest.TestCase):
         )
 
         self.assertEqual(instance.get_revision(), "2")
-        self.assertEqual(instance.datafile_reader.featurevisor_version, "3.1.0")
+        self.assertEqual(instance.datafile.featurevisor_version, "3.1.0")
         self.assertIsNotNone(instance.get_feature("first"))
         self.assertIsNotNone(instance.get_feature("second"))
 
@@ -289,15 +299,38 @@ class SDKTests(unittest.TestCase):
         self.assertEqual(listener_diagnostics[-1]["code"], "module_warning")
         self.assertEqual(listener_closed, [True])
 
-    def test_datafile_reader_parses_stringified_conditions(self) -> None:
-        reader = _DatafileReader(
+    def test_module_diagnostic_level_is_independent_from_instance_level(self) -> None:
+        observed = []
+        instance = create_featurevisor(
+            {
+                "logLevel": "fatal",
+                "modules": [
+                    {
+                        "name": "observer",
+                        "setup": lambda api: api["onDiagnostic"](
+                            lambda diagnostic: observed.append(diagnostic),
+                            {"logLevel": "debug"},
+                        ),
+                    }
+                ],
+            }
+        )
+
+        instance.is_enabled("missing")
+
+        diagnostic = next(item for item in observed if item["code"] == "feature_not_found")
+        self.assertEqual(diagnostic["details"]["featureKey"], "missing")
+        self.assertEqual(diagnostic["details"]["reason"], "feature_not_found")
+
+    def test_evaluation_data_provider_parses_stringified_conditions(self) -> None:
+        reader = _InstanceEvaluationDataProvider(
             datafile={
                 "schemaVersion": "2",
                 "revision": "1",
                 "segments": {"eu": {"conditions": '[{"attribute":"country","operator":"equals","value":"nl"}]'}},
                 "features": {},
             },
-            logger=_create_logger({"level": "fatal"}),
+            diagnostics=_create_evaluation_diagnostics(),
         )
         segment = reader.get_segment("eu")
         self.assertTrue(reader.segment_is_matched(segment, {"country": "nl"}))
@@ -307,9 +340,9 @@ class SDKTests(unittest.TestCase):
             get_params_for_sticky_set_event({"feature1": {"enabled": True}}, {"feature2": {"enabled": True}}, True),
             {"features": ["feature1", "feature2"], "replaced": True},
         )
-        logger = _create_logger({"level": "fatal"})
-        previous = _DatafileReader(datafile={"schemaVersion": "2", "revision": "1", "segments": {}, "features": {"feature1": {"bucketBy": "userId", "hash": "hash1", "traffic": []}}}, logger=logger)
-        current = _DatafileReader(datafile={"schemaVersion": "2", "revision": "2", "segments": {}, "features": {"feature1": {"bucketBy": "userId", "hash": "hash2", "traffic": []}, "feature2": {"bucketBy": "userId", "hash": "hash3", "traffic": []}}}, logger=logger)
+        diagnostics = _create_evaluation_diagnostics()
+        previous = _InstanceEvaluationDataProvider(datafile={"schemaVersion": "2", "revision": "1", "segments": {}, "features": {"feature1": {"bucketBy": "userId", "hash": "hash1", "traffic": []}}}, diagnostics=diagnostics)
+        current = _InstanceEvaluationDataProvider(datafile={"schemaVersion": "2", "revision": "2", "segments": {}, "features": {"feature1": {"bucketBy": "userId", "hash": "hash2", "traffic": []}, "feature2": {"bucketBy": "userId", "hash": "hash3", "traffic": []}}}, diagnostics=diagnostics)
         self.assertEqual(
             get_params_for_datafile_set_event(previous, current),
             {"revision": "2", "previousRevision": "1", "revisionChanged": True, "features": ["feature1", "feature2"], "replaced": False},
@@ -347,14 +380,6 @@ class SDKTests(unittest.TestCase):
 
         self.assertEqual(calls, ["first", "second", "first"])
 
-    def test_logger_handler_and_filtering(self) -> None:
-        calls = []
-        logger = _create_logger({"level": "warn", "handler": lambda level, message, details=None: calls.append((level, message, details))})
-        logger.info("nope")
-        logger.warn("yes")
-        logger.error("yep")
-        self.assertEqual(calls, [("warn", "yes", None), ("error", "yep", None)])
-
     def test_child_instance_flow(self) -> None:
         datafile = {
             "schemaVersion": "2",
@@ -382,10 +407,45 @@ class SDKTests(unittest.TestCase):
         self.assertEqual(child.get_context(), {"appVersion": "1.0.0", "userId": "123", "country": "be"})
         self.assertTrue(child.is_enabled("test"))
         self.assertEqual(child.get_variation("test"), "control")
+        self.assertTrue(child.evaluate_flag("test")["enabled"])
+        self.assertEqual(child.evaluate_variation("test")["variation"]["value"], "control")
         self.assertEqual(child.get_variable("test", "color"), "black")
+        self.assertEqual(child.evaluate_variable("test", "color")["variableValue"], "black")
         self.assertEqual(child.get_variable_json("test", "nestedConfig"), {"key": {"nested": "value"}})
         unsubscribe()
         self.assertTrue(changes)
+
+    def test_child_close_removes_delegated_subscriptions_and_empty_sticky_is_isolated(self) -> None:
+        instance = create_featurevisor({
+            "logLevel": "fatal",
+            "sticky": {"test": {"enabled": True}},
+        })
+        child = instance.spawn({}, {"sticky": {}})
+        delegated = []
+        child.on("datafile_set", lambda details: delegated.append(details))
+
+        self.assertFalse(child.is_enabled("test"))
+        child.close()
+        child.close()
+        instance.set_datafile({
+            "schemaVersion": "2",
+            "revision": "after-close",
+            "segments": {},
+            "features": {},
+        })
+
+        self.assertEqual(delegated, [])
+
+    def test_child_context_matches_javascript_snapshot_behavior(self) -> None:
+        instance = create_featurevisor({"context": {"country": "nl", "plan": "free"}, "logLevel": "fatal"})
+        child = instance.spawn({"country": "de"})
+        instance.set_context({"plan": "pro", "locale": "de-DE"})
+
+        self.assertEqual(child.get_context(), {
+            "country": "de",
+            "plan": "free",
+            "locale": "de-DE",
+        })
 
     def test_default_variable_json_parsing(self) -> None:
         datafile = {
