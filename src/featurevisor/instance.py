@@ -5,12 +5,12 @@ import uuid
 from typing import Any, cast
 
 from .child import FeaturevisorChildInstance
-from .datafile_reader import _DatafileReader
+from .evaluation_data_provider import _InstanceEvaluationDataProvider
 from .emitter import Emitter
 from .evaluate import evaluate_with_modules
 from .events import get_params_for_datafile_set_event, get_params_for_sticky_set_event
 from .helpers import get_value_by_type
-from .logger import _Logger, _create_logger, _default_log_handler
+from .diagnostics import DEFAULT_LOG_LEVEL, LOG_LEVELS, _EvaluationDiagnostics, should_report, write_diagnostic_to_console
 from .modules import FeaturevisorModule, ModulesManager
 from .types import DatafileContent, LogLevel
 
@@ -21,16 +21,14 @@ class Featurevisor:
     def __init__(self, options: dict[str, Any] | None = None) -> None:
         options = options or {}
         self.context = options.get("context") or {}
-        self.logger: _Logger = _create_logger({
-            "level": options.get("logLevel") or _Logger.default_level,
-            "handler": self._handle_internal_log,
-        })
+        self.log_level = cast(LogLevel, options.get("logLevel") or DEFAULT_LOG_LEVEL)
         self.on_diagnostic = options.get("onDiagnostic") or options.get("on_diagnostic")
         self.emitter = Emitter()
         self.sticky = options.get("sticky")
         self.closed = False
         self.module_diagnostic_subscriptions: list[dict[str, Any]] = []
-        self.datafile_reader = _DatafileReader(datafile=empty_datafile, logger=self.logger)
+        self.evaluation_diagnostics = _EvaluationDiagnostics(self.report_diagnostic)
+        self.datafile = _InstanceEvaluationDataProvider(datafile=empty_datafile, diagnostics=self.evaluation_diagnostics)
         self.modules_manager = ModulesManager(
             modules=options.get("modules") or [],
             report_diagnostic=self.report_diagnostic,
@@ -50,29 +48,9 @@ class Featurevisor:
         )
 
     def set_log_level(self, level: LogLevel) -> None:
-        self.logger.set_level(level)
-
-    def _handle_internal_log(self, level: str, message: str, details: dict[str, Any] | None = None) -> None:
-        details = dict(details or {})
-        code = str(details.get("reason") or message)
-        if message == "feature is deprecated":
-            code = "deprecated_feature"
-        elif message == "variable is deprecated":
-            code = "deprecated_variable"
-        elif message == "feature not found":
-            code = "feature_not_found"
-        elif message == "variable schema not found":
-            code = "variable_not_found"
-        elif message == "no variations":
-            code = "no_variations"
-        elif message == "invalid bucketBy":
-            code = "invalid_bucket_by"
-        self.report_diagnostic({
-            "level": level,
-            "code": code,
-            "message": message,
-            "details": details,
-        })
+        if level not in LOG_LEVELS:
+            raise ValueError("Invalid log level")
+        self.log_level = level
 
     def set_datafile(self, datafile, replace: bool = False) -> None:
         if self.closed:
@@ -88,10 +66,10 @@ class Featurevisor:
                 and isinstance(parsed.get("features"), dict)
             ):
                 raise ValueError("Invalid datafile")
-            next_datafile = parsed if replace else self._merge_datafiles(self.datafile_reader.get_datafile(), parsed)
-            new_reader = _DatafileReader(datafile=cast(DatafileContent, next_datafile), logger=self.logger)
-            details = get_params_for_datafile_set_event(self.datafile_reader, new_reader, replace)
-            self.datafile_reader = new_reader
+            next_datafile = parsed if replace else self._merge_datafiles(self.datafile.get_datafile(), parsed)
+            new_datafile = _InstanceEvaluationDataProvider(datafile=cast(DatafileContent, next_datafile), diagnostics=self.evaluation_diagnostics)
+            details = get_params_for_datafile_set_event(self.datafile, new_datafile, replace)
+            self.datafile = new_datafile
             self.report_diagnostic({"level": "info", "code": "datafile_set", "message": "Datafile set", "details": details})
             self.emitter.trigger("datafile_set", details)
         except Exception as exc:
@@ -107,40 +85,44 @@ class Featurevisor:
         self.emitter.trigger("sticky_set", params)
 
     def get_revision(self) -> str:
-        return self.datafile_reader.get_revision()
+        return self.datafile.get_revision()
 
     def get_schema_version(self) -> str:
-        return self.datafile_reader.get_schema_version()
+        return self.datafile.get_schema_version()
 
     def get_segment(self, segment_key: str):
-        return self.datafile_reader.get_segment(segment_key)
+        return self.datafile.get_segment(segment_key)
 
     def get_feature_keys(self) -> list[str]:
-        return self.datafile_reader.get_feature_keys()
+        return self.datafile.get_feature_keys()
 
     def get_variable_keys(self, feature_key: str) -> list[str]:
-        return self.datafile_reader.get_variable_keys(feature_key)
+        return self.datafile.get_variable_keys(feature_key)
 
     def has_variations(self, feature_key: str) -> bool:
-        return self.datafile_reader.has_variations(feature_key)
+        return self.datafile.has_variations(feature_key)
 
     def get_feature(self, feature_key: str):
-        return self.datafile_reader.get_feature(feature_key)
+        return self.datafile.get_feature(feature_key)
 
     def add_module(self, module: dict[str, Any] | FeaturevisorModule):
         if self.closed:
             return None
         return self.modules_manager.add(module)
 
-    def remove_module(self, name_or_module: str | FeaturevisorModule) -> None:
+    def remove_module(self, name: str) -> None:
         if self.closed:
             return
-        self.modules_manager.remove(name_or_module)
+        self.modules_manager.remove(name)
 
     def on(self, event_name, callback):
+        if self.closed:
+            return lambda: None
         return self.emitter.on(event_name, callback)
 
     def close(self) -> None:
+        if self.closed:
+            return
         self.closed = True
         self.modules_manager.close_all()
         self.module_diagnostic_subscriptions = []
@@ -167,15 +149,23 @@ class Featurevisor:
 
     def _get_evaluation_dependencies(self, context: dict[str, Any], options: dict[str, Any] | None = None) -> dict[str, Any]:
         options = options or {}
-        return {
+        dependencies = {
             "context": self.get_context(context),
-            "logger": self.logger,
+            "diagnostics": self.evaluation_diagnostics,
+            "reportDiagnostic": self.report_diagnostic,
             "modulesManager": self.modules_manager,
-            "datafileReader": self.datafile_reader,
-            "sticky": options.get("__featurevisor_child_sticky") or self.sticky,
-            "defaultVariationValue": options.get("defaultVariationValue"),
-            "defaultVariableValue": options.get("defaultVariableValue"),
+            "datafile": self.datafile,
+            "sticky": (
+                options["__featurevisor_child_sticky"]
+                if "__featurevisor_child_sticky" in options
+                else self.sticky
+            ),
         }
+        if "defaultVariationValue" in options:
+            dependencies["defaultVariationValue"] = options["defaultVariationValue"]
+        if "defaultVariableValue" in options:
+            dependencies["defaultVariableValue"] = options["defaultVariableValue"]
+        return dependencies
 
     def evaluate_flag(self, feature_key: str, context: dict[str, Any] | None = None, options: dict[str, Any] | None = None):
         return evaluate_with_modules({**self._get_evaluation_dependencies(context or {}, options), "type": "flag", "featureKey": feature_key})
@@ -184,7 +174,7 @@ class Featurevisor:
         try:
             return self.evaluate_flag(feature_key, context or {}, options).get("enabled") is True
         except Exception as exc:
-            self.logger.error("isEnabled", {"featureKey": feature_key, "error": exc})
+            self.report_diagnostic({"level": "error", "code": "evaluation_error", "message": "isEnabled failed", "originalError": exc, "details": {"featureKey": feature_key}})
             return False
 
     def evaluate_variation(self, feature_key: str, context: dict[str, Any] | None = None, options: dict[str, Any] | None = None):
@@ -193,13 +183,13 @@ class Featurevisor:
     def get_variation(self, feature_key: str, context: dict[str, Any] | None = None, options: dict[str, Any] | None = None):
         try:
             evaluation = self.evaluate_variation(feature_key, context or {}, options)
-            if evaluation.get("variationValue") is not None:
-                return evaluation.get("variationValue")
+            if "variationValue" in evaluation:
+                return evaluation["variationValue"]
             if evaluation.get("variation"):
                 return evaluation["variation"]["value"]
             return None
         except Exception as exc:
-            self.logger.error("getVariation", {"featureKey": feature_key, "error": exc})
+            self.report_diagnostic({"level": "error", "code": "evaluation_error", "message": "getVariation failed", "originalError": exc, "details": {"featureKey": feature_key}})
             return None
 
     def evaluate_variable(self, feature_key: str, variable_key: str, context: dict[str, Any] | None = None, options: dict[str, Any] | None = None):
@@ -215,7 +205,7 @@ class Featurevisor:
                 return value
             return None
         except Exception as exc:
-            self.logger.error("getVariable", {"featureKey": feature_key, "variableKey": variable_key, "error": exc})
+            self.report_diagnostic({"level": "error", "code": "evaluation_error", "message": "getVariable failed", "originalError": exc, "details": {"featureKey": feature_key, "variableKey": variable_key}})
             return None
 
     def get_variable_boolean(self, feature_key: str, variable_key: str, context: dict[str, Any] | None = None, options: dict[str, Any] | None = None):
@@ -241,14 +231,14 @@ class Featurevisor:
 
     def get_all_evaluations(self, context: dict[str, Any] | None = None, feature_keys: list[str] | None = None, options: dict[str, Any] | None = None) -> dict[str, Any]:
         result: dict[str, Any] = {}
-        keys = feature_keys or self.datafile_reader.get_feature_keys()
+        keys = feature_keys or self.datafile.get_feature_keys()
         for feature_key in keys:
             evaluated: dict[str, Any] = {"enabled": self.is_enabled(feature_key, context or {}, options)}
-            if self.datafile_reader.has_variations(feature_key):
+            if self.datafile.has_variations(feature_key):
                 variation = self.get_variation(feature_key, context or {}, options)
                 if variation is not None:
                     evaluated["variation"] = variation
-            variable_keys = self.datafile_reader.get_variable_keys(feature_key)
+            variable_keys = self.datafile.get_variable_keys(feature_key)
             if variable_keys:
                 evaluated["variables"] = {
                     variable_key: self.get_variable(feature_key, variable_key, context or {}, options)
@@ -312,22 +302,19 @@ class Featurevisor:
                     print("[Featurevisor] Diagnostic handler failed:", exc)
 
         if self.on_diagnostic:
-            if self._should_report_diagnostic(diagnostic["level"], self.logger.level):
+            if self._should_report_diagnostic(diagnostic["level"], self.log_level):
                 try:
                     self.on_diagnostic(diagnostic)
                 except Exception as exc:
                     print("[Featurevisor] Diagnostic handler failed:", exc)
-        elif self._should_report_diagnostic(diagnostic["level"], self.logger.level):
-            _default_log_handler(diagnostic["level"], diagnostic.get("message", ""), diagnostic)
+        elif self._should_report_diagnostic(diagnostic["level"], self.log_level):
+            write_diagnostic_to_console(diagnostic)
 
         if diagnostic["level"] == "error":
             self.emitter.trigger("error", {"diagnostic": diagnostic})
 
     def _should_report_diagnostic(self, diagnostic_level: LogLevel, subscriber_level: LogLevel) -> bool:
-        try:
-            return _Logger.all_levels.index(subscriber_level) >= _Logger.all_levels.index(diagnostic_level)
-        except ValueError:
-            return False
+        return should_report(subscriber_level, diagnostic_level)
 
     def _merge_datafiles(self, previous: dict[str, Any], incoming: dict[str, Any]) -> dict[str, Any]:
         return {

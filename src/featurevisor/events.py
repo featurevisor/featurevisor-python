@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from .datafile_reader import _DatafileReader
+from .evaluation_data_provider import _InstanceEvaluationDataProvider
 
 
 def get_params_for_sticky_set_event(previous_sticky_features: dict | None = None, new_sticky_features: dict | None = None, replace: bool = False) -> dict:
@@ -14,17 +14,17 @@ def get_params_for_sticky_set_event(previous_sticky_features: dict | None = None
     return {"features": features, "replaced": replace}
 
 
-def get_params_for_datafile_set_event(previous_datafile_reader: _DatafileReader, new_datafile_reader: _DatafileReader, replace: bool = False) -> dict:
-    previous_revision = previous_datafile_reader.get_revision()
-    previous_feature_keys = previous_datafile_reader.get_feature_keys()
-    new_revision = new_datafile_reader.get_revision()
-    new_feature_keys = new_datafile_reader.get_feature_keys()
+def get_params_for_datafile_set_event(previous_datafile: _InstanceEvaluationDataProvider, new_datafile: _InstanceEvaluationDataProvider, replace: bool = False) -> dict:
+    previous_revision = previous_datafile.get_revision()
+    previous_feature_keys = previous_datafile.get_feature_keys()
+    new_revision = new_datafile.get_revision()
+    new_feature_keys = new_datafile.get_feature_keys()
     removed_features = [key for key in previous_feature_keys if key not in new_feature_keys]
     changed_features = [
         key
         for key in previous_feature_keys
         if key in new_feature_keys
-        and (previous_datafile_reader.get_feature(key) or {}).get("hash") != (new_datafile_reader.get_feature(key) or {}).get("hash")
+        and (previous_datafile.get_feature(key) or {}).get("hash") != (new_datafile.get_feature(key) or {}).get("hash")
     ]
     added_features = [key for key in new_feature_keys if key not in previous_feature_keys]
     features = []

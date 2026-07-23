@@ -36,16 +36,16 @@ def evaluate_with_modules(options: dict[str, Any]) -> dict[str, Any]:
         current_options = modules_manager.run_before_modules(options)
         evaluation = evaluate(current_options)
         if (
-            current_options.get("defaultVariationValue") is not None
+            "defaultVariationValue" in current_options
             and evaluation["type"] == "variation"
-            and evaluation.get("variationValue") is None
-            and evaluation.get("variation") is None
+            and "variationValue" not in evaluation
+            and "variation" not in evaluation
         ):
             evaluation["variationValue"] = current_options["defaultVariationValue"]
         if (
-            current_options.get("defaultVariableValue") is not None
+            "defaultVariableValue" in current_options
             and evaluation["type"] == "variable"
-            and evaluation.get("variableValue") is None
+            and "variableValue" not in evaluation
         ):
             evaluation["variableValue"] = current_options["defaultVariableValue"]
         evaluation = modules_manager.run_after_modules(evaluation, current_options)
@@ -58,20 +58,20 @@ def evaluate_with_modules(options: dict[str, Any]) -> dict[str, Any]:
             "reason": EvaluationReason.ERROR,
             "error": exc,
         }
-        options["logger"].error("error during evaluation", evaluation)
+        options["diagnostics"].error("Error during evaluation", evaluation)
         return evaluation
 
 
-def _find_override_index(overrides: list[dict[str, Any]], context: dict[str, Any], datafile_reader) -> int:
+def _find_override_index(overrides: list[dict[str, Any]], context: dict[str, Any], datafile) -> int:
     for index, override in enumerate(overrides):
         if override.get("conditions"):
             conditions = override["conditions"]
             if isinstance(conditions, str) and conditions != "*":
                 conditions = json.loads(conditions)
-            if datafile_reader.all_conditions_are_matched(conditions, context):
+            if datafile.all_conditions_are_matched(conditions, context):
                 return index
-        if override.get("segments") and datafile_reader.all_segments_are_matched(
-            datafile_reader.parse_segments_if_stringified(override["segments"]), context
+        if override.get("segments") and datafile.all_segments_are_matched(
+            datafile.parse_segments_if_stringified(override["segments"]), context
         ):
             return index
     return -1
@@ -83,8 +83,8 @@ def evaluate(options: dict[str, Any]) -> dict[str, Any]:
     feature_key = options["featureKey"]
     variable_key = options.get("variableKey")
     context = options["context"]
-    logger = options["logger"]
-    datafile_reader = options["datafileReader"]
+    diagnostics = options["diagnostics"]
+    datafile = options["datafile"]
     sticky = options.get("sticky")
     modules_manager = options["modulesManager"]
 
@@ -93,10 +93,10 @@ def evaluate(options: dict[str, Any]) -> dict[str, Any]:
             flag = evaluate({**options, "type": "flag"})
             if flag.get("enabled") is False:
                 evaluation = {"type": type_, "featureKey": feature_key, "reason": EvaluationReason.DISABLED}
-                feature = datafile_reader.get_feature(feature_key)
+                feature = datafile.get_feature(feature_key)
                 if type_ == "variable" and feature and variable_key and feature.get("variablesSchema", {}).get(variable_key):
                     variable_schema = feature["variablesSchema"][variable_key]
-                    if variable_schema.get("disabledValue") is not None:
+                    if "disabledValue" in variable_schema:
                         evaluation = {
                             "type": type_,
                             "featureKey": feature_key,
@@ -116,7 +116,7 @@ def evaluate(options: dict[str, Any]) -> dict[str, Any]:
                             "variableSchema": variable_schema,
                             "enabled": False,
                         }
-                if type_ == "variation" and feature and feature.get("disabledVariationValue") is not None:
+                if type_ == "variation" and feature and "disabledVariationValue" in feature:
                     evaluation = {
                         "type": type_,
                         "featureKey": feature_key,
@@ -124,20 +124,20 @@ def evaluate(options: dict[str, Any]) -> dict[str, Any]:
                         "variationValue": feature["disabledVariationValue"],
                         "enabled": False,
                     }
-                logger.debug("feature is disabled", evaluation)
+                diagnostics.debug("feature is disabled", evaluation)
                 return evaluation
 
         if sticky and sticky.get(feature_key):
             item = sticky[feature_key]
-            if type_ == "flag" and item.get("enabled") is not None:
+            if type_ == "flag" and "enabled" in item:
                 evaluation = {"type": type_, "featureKey": feature_key, "reason": EvaluationReason.STICKY, "sticky": item, "enabled": item["enabled"]}
-                logger.debug("using sticky enabled", evaluation)
+                diagnostics.debug("using sticky enabled", evaluation)
                 return evaluation
-            if type_ == "variation" and item.get("variation") is not None:
+            if type_ == "variation" and "variation" in item:
                 evaluation = {"type": type_, "featureKey": feature_key, "reason": EvaluationReason.STICKY, "variationValue": item["variation"]}
-                logger.debug("using sticky variation", evaluation)
+                diagnostics.debug("using sticky variation", evaluation)
                 return evaluation
-            if variable_key and item.get("variables", {}).get(variable_key) is not None:
+            if variable_key and variable_key in item.get("variables", {}):
                 evaluation = {
                     "type": type_,
                     "featureKey": feature_key,
@@ -145,47 +145,47 @@ def evaluate(options: dict[str, Any]) -> dict[str, Any]:
                     "variableKey": variable_key,
                     "variableValue": item["variables"][variable_key],
                 }
-                logger.debug("using sticky variable", evaluation)
+                diagnostics.debug("using sticky variable", evaluation)
                 return evaluation
 
-        feature = datafile_reader.get_feature(feature_key)
+        feature = datafile.get_feature(feature_key)
         if not feature:
             evaluation = {"type": type_, "featureKey": feature_key, "reason": EvaluationReason.FEATURE_NOT_FOUND}
-            logger.warn("feature not found", evaluation)
+            diagnostics.warn("feature not found", evaluation)
             return evaluation
         if type_ == "flag" and feature.get("deprecated"):
-            logger.warn("feature is deprecated", {"featureKey": feature_key})
+            diagnostics.warn("feature is deprecated", {"featureKey": feature_key})
 
         variable_schema = None
         if variable_key:
             variable_schema = feature.get("variablesSchema", {}).get(variable_key)
             if not variable_schema:
                 evaluation = {"type": type_, "featureKey": feature_key, "reason": EvaluationReason.VARIABLE_NOT_FOUND, "variableKey": variable_key}
-                logger.warn("variable schema not found", evaluation)
+                diagnostics.warn("variable schema not found", evaluation)
                 return evaluation
             if variable_schema.get("deprecated"):
-                logger.warn("variable is deprecated", {"featureKey": feature_key, "variableKey": variable_key})
+                diagnostics.warn("variable is deprecated", {"featureKey": feature_key, "variableKey": variable_key})
 
         if type_ == "variation" and not feature.get("variations"):
             evaluation = {"type": type_, "featureKey": feature_key, "reason": EvaluationReason.NO_VARIATIONS}
-            logger.warn("no variations", evaluation)
+            diagnostics.warn("no variations", evaluation)
             return evaluation
 
-        force_result = datafile_reader.get_matched_force(feature, context)
+        force_result = datafile.get_matched_force(feature, context)
         force = force_result.get("force")
         force_index = force_result.get("forceIndex")
         if force:
-            if type_ == "flag" and force.get("enabled") is not None:
+            if type_ == "flag" and "enabled" in force:
                 evaluation = {"type": type_, "featureKey": feature_key, "reason": EvaluationReason.FORCED, "forceIndex": force_index, "force": force, "enabled": force["enabled"]}
-                logger.debug("forced enabled found", evaluation)
+                diagnostics.debug("forced enabled found", evaluation)
                 return evaluation
             if type_ == "variation" and force.get("variation") is not None and feature.get("variations"):
                 variation = next((item for item in feature["variations"] if item["value"] == force["variation"]), None)
                 if variation:
                     evaluation = {"type": type_, "featureKey": feature_key, "reason": EvaluationReason.FORCED, "forceIndex": force_index, "force": force, "variation": variation}
-                    logger.debug("forced variation found", evaluation)
+                    diagnostics.debug("forced variation found", evaluation)
                     return evaluation
-            if variable_key and force.get("variables", {}).get(variable_key) is not None:
+            if variable_key and variable_key in force.get("variables", {}):
                 evaluation = {
                     "type": type_,
                     "featureKey": feature_key,
@@ -196,7 +196,7 @@ def evaluate(options: dict[str, Any]) -> dict[str, Any]:
                     "variableSchema": variable_schema,
                     "variableValue": force["variables"][variable_key],
                 }
-                logger.debug("forced variable", evaluation)
+                diagnostics.debug("forced variable", evaluation)
                 return evaluation
 
         if type_ == "flag" and feature.get("required"):
@@ -224,10 +224,10 @@ def evaluate(options: dict[str, Any]) -> dict[str, Any]:
                     "required": feature["required"],
                     "enabled": False,
                 }
-                logger.debug("required features not enabled", evaluation)
+                diagnostics.debug("required features not enabled", evaluation)
                 return evaluation
 
-        bucket_key = get_bucket_key(featureKey=feature_key, bucketBy=feature["bucketBy"], context=context, logger=logger)
+        bucket_key = get_bucket_key(featureKey=feature_key, bucketBy=feature["bucketBy"], context=context, diagnostics=diagnostics)
         bucket_key = modules_manager.run_bucket_key_modules(
             {"featureKey": feature_key, "context": context, "bucketBy": feature["bucketBy"], "bucketKey": bucket_key}
         )
@@ -236,8 +236,8 @@ def evaluate(options: dict[str, Any]) -> dict[str, Any]:
             {"featureKey": feature_key, "bucketKey": bucket_key, "context": context, "bucketValue": bucket_value}
         )
 
-        matched_traffic = datafile_reader.get_matched_traffic(feature["traffic"], context)
-        matched_allocation = datafile_reader.get_matched_allocation(matched_traffic, bucket_value) if type_ != "flag" and matched_traffic else None
+        matched_traffic = datafile.get_matched_traffic(feature["traffic"], context)
+        matched_allocation = datafile.get_matched_allocation(matched_traffic, bucket_value) if type_ != "flag" and matched_traffic else None
 
         if matched_traffic:
             if matched_traffic["percentage"] == 0:
@@ -251,7 +251,7 @@ def evaluate(options: dict[str, Any]) -> dict[str, Any]:
                     "traffic": matched_traffic,
                     "enabled": False,
                 }
-                logger.debug("matched rule with 0 percentage", evaluation)
+                diagnostics.debug("matched rule with 0 percentage", evaluation)
                 return evaluation
             if type_ == "flag":
                 if feature.get("ranges"):
@@ -267,7 +267,7 @@ def evaluate(options: dict[str, Any]) -> dict[str, Any]:
                             "traffic": matched_traffic,
                             "enabled": matched_traffic.get("enabled", True),
                         }
-                        logger.debug("matched", evaluation)
+                        diagnostics.debug("matched", evaluation)
                         return evaluation
                     evaluation = {
                         "type": type_,
@@ -277,9 +277,9 @@ def evaluate(options: dict[str, Any]) -> dict[str, Any]:
                         "bucketValue": bucket_value,
                         "enabled": False,
                     }
-                    logger.debug("not matched", evaluation)
+                    diagnostics.debug("not matched", evaluation)
                     return evaluation
-                if matched_traffic.get("enabled") is not None:
+                if "enabled" in matched_traffic:
                     evaluation = {
                         "type": type_,
                         "featureKey": feature_key,
@@ -290,7 +290,7 @@ def evaluate(options: dict[str, Any]) -> dict[str, Any]:
                         "traffic": matched_traffic,
                         "enabled": matched_traffic["enabled"],
                     }
-                    logger.debug("override from rule", evaluation)
+                    diagnostics.debug("override from rule", evaluation)
                     return evaluation
                 if bucket_value <= matched_traffic["percentage"]:
                     evaluation = {
@@ -303,7 +303,7 @@ def evaluate(options: dict[str, Any]) -> dict[str, Any]:
                         "traffic": matched_traffic,
                         "enabled": True,
                     }
-                    logger.debug("matched traffic", evaluation)
+                    diagnostics.debug("matched traffic", evaluation)
                     return evaluation
             if type_ == "variation" and feature.get("variations"):
                 if matched_traffic.get("variation") is not None:
@@ -319,7 +319,7 @@ def evaluate(options: dict[str, Any]) -> dict[str, Any]:
                             "traffic": matched_traffic,
                             "variation": variation,
                         }
-                        logger.debug("override from rule", evaluation)
+                        diagnostics.debug("override from rule", evaluation)
                         return evaluation
                 if matched_allocation and matched_allocation.get("variation") is not None:
                     variation = next((item for item in feature["variations"] if item["value"] == matched_allocation["variation"]), None)
@@ -334,14 +334,14 @@ def evaluate(options: dict[str, Any]) -> dict[str, Any]:
                             "traffic": matched_traffic,
                             "variation": variation,
                         }
-                        logger.debug("allocated variation", evaluation)
+                        diagnostics.debug("allocated variation", evaluation)
                         return evaluation
 
         if type_ == "variable" and variable_key:
             if matched_traffic:
                 overrides = matched_traffic.get("variableOverrides", {}).get(variable_key)
                 if overrides:
-                    override_index = _find_override_index(overrides, context, datafile_reader)
+                    override_index = _find_override_index(overrides, context, datafile)
                     if override_index != -1:
                         override = overrides[override_index]
                         evaluation = {
@@ -357,9 +357,9 @@ def evaluate(options: dict[str, Any]) -> dict[str, Any]:
                             "variableValue": override["value"],
                             "variableOverrideIndex": override_index,
                         }
-                        logger.debug("variable override from rule", evaluation)
+                        diagnostics.debug("variable override from rule", evaluation)
                         return evaluation
-                if matched_traffic.get("variables", {}).get(variable_key) is not None:
+                if variable_key in matched_traffic.get("variables", {}):
                     evaluation = {
                         "type": type_,
                         "featureKey": feature_key,
@@ -372,7 +372,7 @@ def evaluate(options: dict[str, Any]) -> dict[str, Any]:
                         "variableSchema": variable_schema,
                         "variableValue": matched_traffic["variables"][variable_key],
                     }
-                    logger.debug("override from rule", evaluation)
+                    diagnostics.debug("override from rule", evaluation)
                     return evaluation
 
             variation_value = None
@@ -386,7 +386,7 @@ def evaluate(options: dict[str, Any]) -> dict[str, Any]:
                 variation = next((item for item in feature["variations"] if item["value"] == variation_value), None)
                 if variation and variation.get("variableOverrides", {}).get(variable_key):
                     overrides = variation["variableOverrides"][variable_key]
-                    override_index = _find_override_index(overrides, context, datafile_reader)
+                    override_index = _find_override_index(overrides, context, datafile)
                     if override_index != -1:
                         override = overrides[override_index]
                         evaluation = {
@@ -402,9 +402,9 @@ def evaluate(options: dict[str, Any]) -> dict[str, Any]:
                             "variableValue": override["value"],
                             "variableOverrideIndex": override_index,
                         }
-                        logger.debug("variable override from variation", evaluation)
+                        diagnostics.debug("variable override from variation", evaluation)
                         return evaluation
-                if variation and variation.get("variables", {}).get(variable_key) is not None:
+                if variation and variable_key in variation.get("variables", {}):
                     evaluation = {
                         "type": type_,
                         "featureKey": feature_key,
@@ -417,12 +417,12 @@ def evaluate(options: dict[str, Any]) -> dict[str, Any]:
                         "variableSchema": variable_schema,
                         "variableValue": variation["variables"][variable_key],
                     }
-                    logger.debug("allocated variable", evaluation)
+                    diagnostics.debug("allocated variable", evaluation)
                     return evaluation
 
         if type_ == "variation":
             evaluation = {"type": type_, "featureKey": feature_key, "reason": EvaluationReason.NO_MATCH, "bucketKey": bucket_key, "bucketValue": bucket_value}
-            logger.debug("no matched variation", evaluation)
+            diagnostics.debug("no matched variation", evaluation)
             return evaluation
         if type_ == "variable":
             if variable_schema:
@@ -436,15 +436,15 @@ def evaluate(options: dict[str, Any]) -> dict[str, Any]:
                     "variableSchema": variable_schema,
                     "variableValue": variable_schema.get("defaultValue"),
                 }
-                logger.debug("using default value", evaluation)
+                diagnostics.debug("using default value", evaluation)
                 return evaluation
             evaluation = {"type": type_, "featureKey": feature_key, "reason": EvaluationReason.VARIABLE_NOT_FOUND, "variableKey": variable_key, "bucketKey": bucket_key, "bucketValue": bucket_value}
-            logger.debug("variable not found", evaluation)
+            diagnostics.debug("variable not found", evaluation)
             return evaluation
         evaluation = {"type": type_, "featureKey": feature_key, "reason": EvaluationReason.NO_MATCH, "bucketKey": bucket_key, "bucketValue": bucket_value, "enabled": False}
-        logger.debug("nothing matched", evaluation)
+        diagnostics.debug("nothing matched", evaluation)
         return evaluation
     except Exception as exc:
         evaluation = {"type": type_, "featureKey": feature_key, "variableKey": variable_key, "reason": EvaluationReason.ERROR, "error": exc}
-        logger.error("error", evaluation)
+        diagnostics.error("Error during evaluation", evaluation)
         return evaluation

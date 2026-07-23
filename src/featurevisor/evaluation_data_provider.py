@@ -5,13 +5,13 @@ import re
 from typing import Any
 
 from .conditions import condition_is_matched
-from .logger import _Logger
+from .diagnostics import _EvaluationDiagnostics
 from .types import Context, DatafileContent, Feature, Force, Segment, Traffic
 
 
-class _DatafileReader:
-    def __init__(self, *, datafile: DatafileContent, logger: _Logger) -> None:
-        self.logger = logger
+class _InstanceEvaluationDataProvider:
+    def __init__(self, *, datafile: DatafileContent, diagnostics: _EvaluationDiagnostics) -> None:
+        self.diagnostics = diagnostics
         self.schema_version = datafile["schemaVersion"]
         self.revision = datafile["revision"]
         self.featurevisor_version = datafile.get("featurevisorVersion")
@@ -59,9 +59,16 @@ class _DatafileReader:
     def get_regex(self, regex_string: str, regex_flags: str = "") -> re.Pattern[str]:
         key = f"{regex_string}-{regex_flags}"
         if key not in self.regex_cache:
+            invalid_flags = set(regex_flags) - set("gimsuy")
+            if invalid_flags:
+                raise ValueError(f"invalid regular expression flags: {''.join(sorted(invalid_flags))}")
             flags = 0
             if "i" in regex_flags:
                 flags |= re.IGNORECASE
+            if "m" in regex_flags:
+                flags |= re.MULTILINE
+            if "s" in regex_flags:
+                flags |= re.DOTALL
             self.regex_cache[key] = re.compile(regex_string, flags)
         return self.regex_cache[key]
 
@@ -73,7 +80,11 @@ class _DatafileReader:
             try:
                 return condition_is_matched(conditions, context, get_regex)
             except Exception as exc:
-                self.logger.warn(str(exc), {"error": exc, "details": {"condition": conditions, "context": context}})
+                self.diagnostics.warn(str(exc), {
+                    "code": "condition_match_error",
+                    "originalError": exc,
+                    "details": {"condition": conditions, "context": context},
+                })
                 return False
         if isinstance(conditions, dict) and isinstance(conditions.get("and"), list):
             return all(self.all_conditions_are_matched(item, context) for item in conditions["and"])
@@ -138,7 +149,11 @@ class _DatafileReader:
         try:
             return json.loads(conditions)
         except Exception as exc:
-            self.logger.error("Error parsing conditions", {"error": exc, "details": {"conditions": conditions}})
+            self.diagnostics.error("Error parsing conditions", {
+                "code": "conditions_parse_error",
+                "originalError": exc,
+                "details": {"conditions": conditions},
+            })
             return conditions
 
     def parse_segments_if_stringified(self, segments: Any) -> Any:

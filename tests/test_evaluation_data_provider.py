@@ -5,17 +5,17 @@ import unittest
 
 sys.path.insert(0, "src")
 
-from featurevisor.datafile_reader import _DatafileReader
-from featurevisor.logger import _create_logger
+from featurevisor.evaluation_data_provider import _InstanceEvaluationDataProvider
+from featurevisor.diagnostics import _create_evaluation_diagnostics
 
 
-class DatafileReaderParityTests(unittest.TestCase):
+class EvaluationDataProviderTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
-        cls.logger = _create_logger()
+        cls.diagnostics = _create_evaluation_diagnostics()
 
     def test_should_be_a_function(self) -> None:
-        self.assertTrue(callable(_DatafileReader))
+        self.assertTrue(callable(_InstanceEvaluationDataProvider))
 
     def test_v2_datafile_schema_should_return_requested_entities(self) -> None:
         datafile_json = {
@@ -35,7 +35,7 @@ class DatafileReaderParityTests(unittest.TestCase):
                 "testWithNoVariations": {"key": "testWithNoVariations", "bucketBy": "userId", "traffic": [{"key": "1", "segments": "*", "percentage": 100000}]},
             },
         }
-        reader = _DatafileReader(datafile=datafile_json, logger=self.logger)
+        reader = _InstanceEvaluationDataProvider(datafile=datafile_json, diagnostics=self.diagnostics)
         self.assertEqual(reader.getRevision(), "1")
         self.assertEqual(reader.getSchemaVersion(), "2")
         self.assertEqual(reader.getSegment("netherlands"), datafile_json["segments"]["netherlands"])
@@ -79,7 +79,7 @@ class DatafileReaderParityTests(unittest.TestCase):
                 "version_5.5": {"key": "version_5.5", "conditions": [{"or": [{"attribute": "version", "operator": "equals", "value": "5.5"}, {"attribute": "version", "operator": "equals", "value": 5.5}]}]},
             },
         }
-        reader = _DatafileReader(datafile=datafile, logger=self.logger)
+        reader = _InstanceEvaluationDataProvider(datafile=datafile, diagnostics=self.diagnostics)
         matches = [
             ("*", {}, True),
             ("*", {"foo": "foo"}, True),
