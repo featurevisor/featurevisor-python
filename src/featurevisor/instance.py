@@ -8,7 +8,7 @@ from .child import FeaturevisorChildInstance
 from .evaluation_data_provider import _InstanceEvaluationDataProvider
 from .emitter import Emitter
 from .evaluate import evaluate_with_modules
-from .events import get_params_for_datafile_set_event, get_params_for_sticky_set_event, get_params_for_sticky_variables_set_event
+from .events import get_params_for_datafile_set_event, get_params_for_sticky_features_set_event, get_params_for_sticky_variables_set_event
 from .helpers import get_value_by_type
 from .diagnostics import DEFAULT_LOG_LEVEL, LOG_LEVELS, _EvaluationDiagnostics, should_report, write_diagnostic_to_console
 from .modules import FeaturevisorModule, ModulesManager
@@ -24,7 +24,7 @@ class Featurevisor:
         self.log_level = cast(LogLevel, options.get("logLevel") or DEFAULT_LOG_LEVEL)
         self.on_diagnostic = options.get("onDiagnostic") or options.get("on_diagnostic")
         self.emitter = Emitter()
-        self.sticky_features = options.get("stickyFeatures") or options.get("sticky")
+        self.sticky_features = options.get("stickyFeatures")
         self.sticky_variables = options.get("stickyVariables")
         self.closed = False
         self.module_diagnostic_subscriptions: list[dict[str, Any]] = []
@@ -77,17 +77,13 @@ class Featurevisor:
         except Exception as exc:
             self.report_diagnostic({"level": "error", "code": "invalid_datafile", "message": "Could not parse datafile", "originalError": exc})
 
-    def set_sticky(self, sticky: dict[str, Any], replace: bool = False) -> None:
-        self.set_sticky_features(sticky, replace)
-
     def set_sticky_features(self, sticky: dict[str, Any], replace: bool = False) -> None:
         if self.closed:
             return
         previous = self.sticky_features or {}
         self.sticky_features = dict(sticky) if replace else {**(self.sticky_features or {}), **sticky}
-        params = get_params_for_sticky_set_event(previous, self.sticky_features, replace)
-        self.report_diagnostic({"level": "info", "code": "sticky_set", "message": "Sticky features set", "details": params})
-        self.emitter.trigger("sticky_set", params)
+        params = get_params_for_sticky_features_set_event(previous, self.sticky_features, replace)
+        self.report_diagnostic({"level": "info", "code": "sticky_features_set", "message": "Sticky features set", "details": params})
         self.emitter.trigger("sticky_features_set", params)
 
     def set_sticky_variables(self, sticky: dict[str, Any], replace: bool = False) -> None:
@@ -163,7 +159,7 @@ class Featurevisor:
         return FeaturevisorChildInstance(
             parent=self,
             context=self.get_context(context or {}),
-            sticky_features=options.get("stickyFeatures") or options.get("sticky"),
+            sticky_features=options.get("stickyFeatures"),
             sticky_variables=options.get("stickyVariables"),
         )
 
@@ -373,9 +369,6 @@ class Featurevisor:
         keys = variable_keys or self.datafile.get_variable_keys()
         return {key: self.get_variable(key, context or {}, options or {}) for key in keys}
 
-    def get_all_evaluations(self, context: dict[str, Any] | None = None, feature_keys: list[str] | None = None, options: dict[str, Any] | None = None) -> dict[str, Any]:
-        return self.get_feature_evaluations(context, feature_keys, options)
-
     def create_module_api(self, module: FeaturevisorModule) -> dict[str, Any]:
         def on_diagnostic(handler, options: dict[str, Any] | None = None):
             options = options or {}
@@ -457,7 +450,6 @@ class Featurevisor:
 
     setLogLevel = set_log_level
     setDatafile = set_datafile
-    setSticky = set_sticky
     setStickyFeatures = set_sticky_features
     setStickyVariables = set_sticky_variables
     getRevision = get_revision
@@ -484,7 +476,6 @@ class Featurevisor:
     getVariableArray = get_variable_array
     getVariableObject = get_variable_object
     getVariableJSON = get_variable_json
-    getAllEvaluations = get_all_evaluations
     getFeatureEvaluations = get_feature_evaluations
     getVariableEvaluations = get_variable_evaluations
 

@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from .emitter import Emitter
-from .events import get_params_for_sticky_set_event, get_params_for_sticky_variables_set_event
+from .events import get_params_for_sticky_features_set_event, get_params_for_sticky_variables_set_event
 
 if TYPE_CHECKING:
     from .instance import Featurevisor
@@ -19,7 +19,7 @@ class FeaturevisorChildInstance:
         self._parent_unsubscribers: list[Any] = []
 
     def on(self, event_name, callback):
-        if event_name in {"context_set", "sticky_set", "sticky_features_set", "sticky_variables_set"}:
+        if event_name in {"context_set", "sticky_features_set", "sticky_variables_set"}:
             return self.emitter.on(event_name, callback)
         parent_unsubscribe = self.parent.on(event_name, callback)
         active = True
@@ -49,14 +49,10 @@ class FeaturevisorChildInstance:
     def get_context(self, context: dict[str, Any] | None = None) -> dict[str, Any]:
         return self.parent.get_context({**self.context, **(context or {})})
 
-    def set_sticky(self, sticky: dict[str, Any], replace: bool = False) -> None:
-        self.set_sticky_features(sticky, replace)
-
     def set_sticky_features(self, sticky: dict[str, Any], replace: bool = False) -> None:
         previous = self.sticky_features
         self.sticky_features = dict(sticky) if replace else {**self.sticky_features, **sticky}
-        params = get_params_for_sticky_set_event(previous, self.sticky_features, replace)
-        self.emitter.trigger("sticky_set", params)
+        params = get_params_for_sticky_features_set_event(previous, self.sticky_features, replace)
         self.emitter.trigger("sticky_features_set", params)
 
     def set_sticky_variables(self, sticky: dict[str, Any], replace: bool = False) -> None:
@@ -134,12 +130,8 @@ class FeaturevisorChildInstance:
     def get_variable_evaluations(self, context=None, variable_keys=None, options=None):
         return self.parent.get_variable_evaluations(self._merge_context(context), variable_keys, self._merge_options(options))
 
-    def get_all_evaluations(self, context=None, feature_keys=None, options=None):
-        return self.get_feature_evaluations(context, feature_keys, options)
-
     setContext = set_context
     getContext = get_context
-    setSticky = set_sticky
     setStickyFeatures = set_sticky_features
     setStickyVariables = set_sticky_variables
     isEnabled = is_enabled
@@ -157,4 +149,3 @@ class FeaturevisorChildInstance:
     getVariableJSON = get_variable_json
     getFeatureEvaluations = get_feature_evaluations
     getVariableEvaluations = get_variable_evaluations
-    getAllEvaluations = get_all_evaluations

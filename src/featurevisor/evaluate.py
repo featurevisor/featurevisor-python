@@ -89,11 +89,11 @@ def _required_features_are_matched(requirements: Any, options: dict[str, Any]) -
             for key, value in options.items()
             if key not in {"type", "featureKey", "variableKey", "defaultVariationValue", "defaultVariableValue"}
         }
-        flag = evaluate({**nested, "type": "flag", "featureKey": feature_key})
+        flag = evaluate_with_modules({**nested, "type": "flag", "featureKey": feature_key})
         if (flag.get("enabled") is True) != expected_enabled:
             return False
         if expected_variation is not None:
-            variation = evaluate({**nested, "type": "variation", "featureKey": feature_key})
+            variation = evaluate_with_modules({**nested, "type": "variation", "featureKey": feature_key})
             actual = variation.get("variationValue")
             if actual is None and variation.get("variation"):
                 actual = variation["variation"].get("value")
@@ -130,7 +130,7 @@ def evaluate(options: dict[str, Any]) -> dict[str, Any]:
     context = options["context"]
     diagnostics = options["diagnostics"]
     datafile = options["datafile"]
-    sticky = options.get("stickyFeatures") or options.get("sticky")
+    sticky = options.get("stickyFeatures")
     modules_manager = options["modulesManager"]
 
     try:

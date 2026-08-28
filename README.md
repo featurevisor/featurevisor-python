@@ -22,7 +22,7 @@ This SDK is compatible with Featurevisor v3 projects and v2 datafiles.
 - [Getting variables](#getting-variables)
   - [Type specific methods](#type-specific-methods)
 - [Getting all evaluations](#getting-all-evaluations)
-- [Sticky](#sticky)
+- [Sticky features and variables](#sticky-features-and-variables)
   - [Initialize with sticky](#initialize-with-sticky)
   - [Set sticky afterwards](#set-sticky-afterwards)
 - [Setting datafile](#setting-datafile)
@@ -37,7 +37,7 @@ This SDK is compatible with Featurevisor v3 projects and v2 datafiles.
 - [Events](#events)
   - [`datafile_set`](#datafile_set)
   - [`context_set`](#context_set)
-  - [`sticky_set`](#sticky_set)
+  - [`sticky_features_set` and `sticky_variables_set`](#sticky_features_set-and-sticky_variables_set)
   - [`error`](#error)
 - [Modules](#modules)
   - [Defining a module](#defining-a-module)
@@ -82,7 +82,7 @@ f: Featurevisor = create_featurevisor({
 
 Most applications only need `create_featurevisor` and the `Featurevisor` instance type. Public extension and observability APIs include `FeaturevisorModule`, diagnostics, events, and the datafile dictionaries accepted by the factory.
 
-Concurrent evaluations are safe after an instance is configured. Do not mutate or close the same instance concurrently with evaluations. Serialize calls to `set_datafile`, `set_context`, `set_sticky`, `add_module`, `remove_module`, and `close`. Module, event, and diagnostic callbacks must synchronize mutable state that they capture.
+Concurrent evaluations are safe after an instance is configured. Do not mutate or close the same instance concurrently with evaluations. Serialize calls to `set_datafile`, `set_context`, `set_sticky_features`, `set_sticky_variables`, `add_module`, `remove_module`, and `close`. Module, event, and diagnostic callbacks must synchronize mutable state that they capture.
 
 ## Initialization
 
@@ -237,9 +237,7 @@ features = f.get_feature_evaluations()
 variables = f.get_variable_evaluations()
 ```
 
-`get_all_evaluations()` remains an alias for `get_feature_evaluations()`.
-
-## Sticky
+## Sticky features and variables
 
 ### Initialize with sticky
 
@@ -277,8 +275,6 @@ f.set_sticky_features({
 
 f.set_sticky_variables({"supportEmail": "new@example.com"})
 ```
-
-`sticky` and `set_sticky()` remain aliases for feature sticky values.
 
 ## Setting datafile
 
@@ -419,10 +415,13 @@ unsubscribe = f.on("context_set", lambda event: print(event["context"]))
 unsubscribe()
 ```
 
-### `sticky_set`
+### `sticky_features_set` and `sticky_variables_set`
 
 ```python
-unsubscribe = f.on("sticky_set", lambda event: print(event["features"]))
+unsubscribe = f.on("sticky_features_set", lambda event: print(event["features"]))
+unsubscribe()
+
+unsubscribe = f.on("sticky_variables_set", lambda event: print(event["variables"]))
 unsubscribe()
 ```
 
@@ -499,7 +498,7 @@ my_module = {
 }
 ```
 
-`beforeEvaluation` and `afterEvaluation` receive both feature and global variable evaluations. The older `before` and `after` callbacks only apply to feature evaluations.
+For feature evaluations, all `before` callbacks run in registration order, followed by all `beforeEvaluation` callbacks. After evaluation and caller defaults, all `afterEvaluation` callbacks run, followed by all `after` callbacks. Global variable evaluations use only `beforeEvaluation` and `afterEvaluation`. Required feature checks run through the complete module pipeline, and transformed defaults are preserved.
 
 The module API passed to `setup` exposes `getRevision`, `onDiagnostic`, and `reportDiagnostic`.
 
@@ -719,9 +718,9 @@ The provider maps Featurevisor evaluation results to OpenFeature details:
 
 | Featurevisor result | OpenFeature result |
 | --- | --- |
-| Required, forced, sticky, or rule match | `TARGETING_MATCH` |
+| Required feature rule, forced, sticky, or rule match | `TARGETING_MATCH` |
 | Traffic allocation | `SPLIT` |
-| Disabled variation or variable | `DISABLED` |
+| Unmet global variable requirements, disabled variation, or disabled variable | `DISABLED` |
 | No match or variable default | `DEFAULT` |
 | Missing feature, variable, or variations | `ERROR` with `FLAG_NOT_FOUND` |
 | Wrong resolver type | `ERROR` with `TYPE_MISMATCH` |

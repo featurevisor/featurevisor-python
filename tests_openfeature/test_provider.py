@@ -262,6 +262,7 @@ class OpenFeatureProviderTest(unittest.TestCase):
     def test_maps_all_featurevisor_reasons(self):
         mappings = {
             "required": Reason.TARGETING_MATCH,
+            "required_features_unmet": Reason.DISABLED,
             "forced": Reason.TARGETING_MATCH,
             "sticky": Reason.TARGETING_MATCH,
             "rule": Reason.TARGETING_MATCH,

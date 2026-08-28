@@ -181,11 +181,11 @@ class FeaturevisorOpenFeatureProvider(AbstractProvider):
     def _reason(reason: str | None) -> Reason:
         if reason in {"feature_not_found", "variable_not_found", "no_variations", "error"}:
             return Reason.ERROR
-        if reason in {"required", "required_features_unmet", "forced", "sticky", "rule", "variable_override_variation", "variable_override_rule"}:
+        if reason in {"required", "forced", "sticky", "rule", "variable_override_variation", "variable_override_rule"}:
             return Reason.TARGETING_MATCH
         if reason == "allocated":
             return Reason.SPLIT
-        if reason in {"disabled", "variation_disabled", "variable_disabled"}:
+        if reason in {"disabled", "required_features_unmet", "variation_disabled", "variable_disabled"}:
             return Reason.DISABLED
         return Reason.DEFAULT
 

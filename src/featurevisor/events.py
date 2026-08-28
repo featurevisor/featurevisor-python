@@ -5,7 +5,7 @@ import json
 from .evaluation_data_provider import _InstanceEvaluationDataProvider
 
 
-def get_params_for_sticky_set_event(previous_sticky_features: dict | None = None, new_sticky_features: dict | None = None, replace: bool = False) -> dict:
+def get_params_for_sticky_features_set_event(previous_sticky_features: dict | None = None, new_sticky_features: dict | None = None, replace: bool = False) -> dict:
     previous_sticky_features = previous_sticky_features or {}
     new_sticky_features = new_sticky_features or {}
     all_keys = list(previous_sticky_features.keys()) + list(new_sticky_features.keys())

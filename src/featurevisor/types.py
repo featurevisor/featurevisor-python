@@ -21,7 +21,7 @@ BucketValue = int
 
 LogLevel = Literal["fatal", "error", "warn", "info", "debug"]
 EventName = Literal[
-    "datafile_set", "context_set", "sticky_set", "sticky_features_set",
+    "datafile_set", "context_set", "sticky_features_set",
     "sticky_variables_set", "error"
 ]
 
