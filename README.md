@@ -19,9 +19,10 @@ This SDK is compatible with Featurevisor v3 projects and v2 datafiles.
   - [Manually passing context](#manually-passing-context)
 - [Check if enabled](#check-if-enabled)
 - [Getting variation](#getting-variation)
-- [Getting variables](#getting-variables)
-  - [Type specific methods](#type-specific-methods)
-- [Getting all evaluations](#getting-all-evaluations)
+- [Getting feature variables](#getting-feature-variables)
+- [Getting global variables](#getting-global-variables)
+- [Type specific methods](#type-specific-methods)
+- [Getting evaluation snapshots](#getting-evaluation-snapshots)
 - [Sticky features and variables](#sticky-features-and-variables)
   - [Initialize with sticky](#initialize-with-sticky)
   - [Set sticky afterwards](#set-sticky-afterwards)
@@ -106,7 +107,7 @@ f = create_featurevisor({
 
 ## Evaluation types
 
-We can evaluate 3 types of values against a particular [feature](https://featurevisor.com/docs/features/):
+Featurevisor evaluates flags, variations, feature variables, and global variables:
 
 - [**Flag**](#check-if-enabled) (`bool`): whether the feature is enabled or not
 - [**Variation**](#getting-variation) (`string`): the variation of the feature (if any)
@@ -207,7 +208,7 @@ evaluation = f.evaluate_variable("supportEmail", {"country": "nl"})
 
 Global variables honour sticky values, required features, and the first matching override. When an override contains both conditions and segments, both must match.
 
-### Type specific methods
+## Type specific methods
 
 Typed convenience methods are also available:
 
