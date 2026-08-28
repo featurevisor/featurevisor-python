@@ -158,6 +158,24 @@ def _assert_feature(sdk, feature_key: str, assertion: dict[str, Any], datafile: 
                     assertion_result["errors"].append({"type": "evaluation", "expected": expected, "actual": actual, "details": {**details_base, "evaluationType": "variable", "evaluationKey": variable_key}})
 
 
+def _assert_global_variable(sdk, variable_key: str, assertion: dict[str, Any], result: dict[str, Any], assertion_result: dict[str, Any]) -> None:
+    context = assertion.get("context", {})
+    options = {}
+    if "defaultVariableValue" in assertion:
+        options["defaultVariableValue"] = assertion["defaultVariableValue"]
+    if "expectedValue" in assertion:
+        actual = sdk.get_variable(variable_key, context, options)
+        if not _compare_jsonish(assertion["expectedValue"], actual):
+            result["passed"] = assertion_result["passed"] = False
+            assertion_result["errors"].append({"type": "variable", "expected": assertion["expectedValue"], "actual": actual, "details": {"variableKey": variable_key}})
+    for key, expected in assertion.get("expectedEvaluation", {}).items():
+        evaluation = sdk.evaluate_variable(variable_key, context, options)
+        actual = _get_evaluation_value(evaluation, key)
+        if not _compare_jsonish(expected, actual):
+            result["passed"] = assertion_result["passed"] = False
+            assertion_result["errors"].append({"type": "evaluation", "expected": expected, "actual": actual, "details": {"variableKey": variable_key, "evaluationKey": key}})
+
+
 def test_segment(segment: dict[str, Any], assertion_options: dict[str, Any] | None = None) -> dict[str, Any]:
     options = assertion_options or {}
     diagnostics = _create_evaluation_diagnostics()
@@ -217,7 +235,34 @@ def run_test_project(project_directory_path: str, *, key_pattern: str | None = N
 
     passed = True
     for test in tests:
-        if test.get("feature"):
+        if test.get("variable"):
+            assertions = [
+                assertion for assertion in test["assertions"]
+                if not selected_targets or not assertion.get("target") or assertion.get("target") in selected_targets
+            ]
+            if not assertions:
+                continue
+            variable_key = test["variable"]
+            result = {"type": "variable", "key": variable_key, "notFound": False, "passed": True, "duration": 0, "assertions": []}
+            variable_start = time.perf_counter()
+            for assertion in assertions:
+                assertion_start = time.perf_counter()
+                datafile = _get_datafile_for_assertion(assertion, datafile_cache)
+                if variable_key not in datafile.get("variables", {}):
+                    result["notFound"] = True
+                    result["passed"] = False
+                    continue
+                sdk = create_featurevisor({
+                    "datafile": datafile,
+                    "stickyVariables": assertion.get("stickyVariables", {}),
+                    "logLevel": _log_level(verbose, quiet),
+                })
+                assertion_result = {"description": assertion.get("description", ""), "duration": 0, "passed": True, "errors": []}
+                _assert_global_variable(sdk, variable_key, assertion, result, assertion_result)
+                assertion_result["duration"] = int((time.perf_counter() - assertion_start) * 1000)
+                result["assertions"].append(assertion_result)
+            result["duration"] = int((time.perf_counter() - variable_start) * 1000)
+        elif test.get("feature"):
             assertions = [
                 assertion for assertion in test["assertions"]
                 if not selected_targets or not assertion.get("target") or assertion.get("target") in selected_targets
@@ -237,7 +282,8 @@ def run_test_project(project_directory_path: str, *, key_pattern: str | None = N
                     print(json.dumps(datafile, indent=2))
                 sdk = create_featurevisor({
                     "datafile": datafile,
-                    "sticky": assertion.get("sticky", {}),
+                    "stickyFeatures": assertion.get("stickyFeatures") or assertion.get("sticky", {}),
+                    "stickyVariables": assertion.get("stickyVariables", {}),
                     "modules": [
                         {
                             "name": "tester",
@@ -252,7 +298,10 @@ def run_test_project(project_directory_path: str, *, key_pattern: str | None = N
                 assertion_result = {"description": assertion.get("description", ""), "duration": 0, "passed": True, "errors": []}
                 _assert_feature(sdk, feature_key, {**assertion, "context": context}, datafile, result, assertion_result)
                 for index, child in enumerate(assertion.get("children", [])):
-                    child_instance = sdk.spawn(child.get("context", {}), {"sticky": child.get("sticky") or assertion.get("sticky")})
+                    child_instance = sdk.spawn(child.get("context", {}), {
+                        "stickyFeatures": child.get("stickyFeatures") or child.get("sticky") or assertion.get("stickyFeatures") or assertion.get("sticky"),
+                        "stickyVariables": child.get("stickyVariables") or assertion.get("stickyVariables"),
+                    })
                     _assert_feature(child_instance, feature_key, child, datafile, result, assertion_result, child_index=index)
                 assertion_result["duration"] = int((time.perf_counter() - assertion_start) * 1000)
                 result["assertions"].append(assertion_result)
@@ -285,7 +334,7 @@ def run_test_project(project_directory_path: str, *, key_pattern: str | None = N
     return passed
 
 
-def run_benchmark(project_directory_path: str, *, environment: str, feature: str, context: dict[str, Any] | None = None, n: int = 1000, variation: bool = False, variable: str | None = None, schema_version: str | None = None, inflate: int = 0, verbose: bool = False, quiet: bool = False, targets: list[str] | None = None) -> int:
+def run_benchmark(project_directory_path: str, *, environment: str, feature: str | None = None, context: dict[str, Any] | None = None, n: int = 1000, variation: bool = False, variable: str | None = None, schema_version: str | None = None, inflate: int = 0, verbose: bool = False, quiet: bool = False, targets: list[str] | None = None) -> int:
     project = FeaturevisorProject(project_directory_path)
     selected_targets = _resolve_targets(project, targets)
     entries: list[str | None] = []
@@ -298,7 +347,7 @@ def run_benchmark(project_directory_path: str, *, environment: str, feature: str
     return 0
 
 
-def _run_benchmark_datafile(datafile: dict[str, Any], build_duration: float, *, environment: str, target: str | None, feature: str, context: dict[str, Any] | None, n: int, variation: bool, variable: str | None, verbose: bool, quiet: bool) -> None:
+def _run_benchmark_datafile(datafile: dict[str, Any], build_duration: float, *, environment: str, target: str | None, feature: str | None, context: dict[str, Any] | None, n: int, variation: bool, variable: str | None, verbose: bool, quiet: bool) -> None:
     level = _log_level(verbose, quiet)
     instance = create_featurevisor({"datafile": datafile, "logLevel": level})
     context = context or {}
@@ -308,12 +357,16 @@ def _run_benchmark_datafile(datafile: dict[str, Any], build_duration: float, *, 
     value = None
     for _ in range(n):
         evaluation_start = time.perf_counter_ns()
-        if variation:
-            value = instance.get_variation(feature, context)
-        elif variable:
-            value = instance.get_variable(feature, variable, context)
+        if variable and not feature:
+            value = instance.get_variable(variable, context)
         else:
-            value = instance.is_enabled(feature, context)
+            assert feature is not None
+            if variation:
+                value = instance.get_variation(feature, context)
+            elif variable:
+                value = instance.get_variable(feature, variable, context)
+            else:
+                value = instance.is_enabled(feature, context)
         evaluation_duration_ns = time.perf_counter_ns() - evaluation_start
         total_duration_ns += evaluation_duration_ns
         min_duration_ns = evaluation_duration_ns if min_duration_ns is None else min(min_duration_ns, evaluation_duration_ns)
@@ -321,8 +374,11 @@ def _run_benchmark_datafile(datafile: dict[str, Any], build_duration: float, *, 
     duration = total_duration_ns / 1_000_000_000
     average_duration_ns = total_duration_ns / n if n else 0
     print("")
-    print("Benchmark Featurevisor feature")
-    print(f"  Feature: {feature}")
+    print("Benchmark Featurevisor global variable" if variable and not feature else "Benchmark Featurevisor feature")
+    if feature:
+        print(f"  Feature: {feature}")
+    if variable:
+        print(f"  Variable: {variable}")
     print(f"  Environment: {environment}")
     if target:
         print(f"  Target: {target}")

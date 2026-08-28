@@ -345,7 +345,7 @@ class SDKTests(unittest.TestCase):
         current = _InstanceEvaluationDataProvider(datafile={"schemaVersion": "2", "revision": "2", "segments": {}, "features": {"feature1": {"bucketBy": "userId", "hash": "hash2", "traffic": []}, "feature2": {"bucketBy": "userId", "hash": "hash3", "traffic": []}}}, diagnostics=diagnostics)
         self.assertEqual(
             get_params_for_datafile_set_event(previous, current),
-            {"revision": "2", "previousRevision": "1", "revisionChanged": True, "features": ["feature1", "feature2"], "replaced": False},
+            {"revision": "2", "previousRevision": "1", "revisionChanged": True, "features": ["feature1", "feature2"], "variables": [], "replaced": False},
         )
 
     def test_emitter_subscribe_unsubscribe(self) -> None:

@@ -20,7 +20,10 @@ BucketKey = str
 BucketValue = int
 
 LogLevel = Literal["fatal", "error", "warn", "info", "debug"]
-EventName = Literal["datafile_set", "context_set", "sticky_set", "error"]
+EventName = Literal[
+    "datafile_set", "context_set", "sticky_set", "sticky_features_set",
+    "sticky_variables_set", "error"
+]
 
 
 class EvaluatedFeature(TypedDict, total=False):
@@ -30,12 +33,23 @@ class EvaluatedFeature(TypedDict, total=False):
 
 
 StickyFeatures = dict[FeatureKey, EvaluatedFeature]
+StickyVariables = dict[VariableKey, VariableValue]
 EvaluatedFeatures = dict[FeatureKey, EvaluatedFeature]
+EvaluatedVariables = dict[VariableKey, VariableValue]
+
+
+class RequiredFeature(TypedDict, total=False):
+    feature: FeatureKey
+    enabled: bool
+    variation: VariationValue
 
 
 class VariableOverride(TypedDict, total=False):
+    key: str
+    keyPath: list[str]
     conditions: Any
     segments: Any
+    requiredFeatures: str | RequiredFeature | list[str | RequiredFeature]
     value: VariableValue
 
 
@@ -57,6 +71,13 @@ class VariableSchema(TypedDict, total=False):
     disabledValue: VariableValue
     useDefaultWhenDisabled: bool
     deprecated: bool
+
+
+class GlobalVariable(VariableSchema, total=False):
+    key: VariableKey
+    hash: str
+    requiredFeatures: str | RequiredFeature | list[str | RequiredFeature]
+    overrides: list[VariableOverride]
 
 
 class Allocation(TypedDict):
@@ -89,6 +110,7 @@ class Feature(TypedDict, total=False):
     hash: str
     deprecated: bool
     required: list[str | RequiredFeatureRef]
+    requiredFeatures: str | RequiredFeature | list[str | RequiredFeature]
     variablesSchema: dict[VariableKey, VariableSchema]
     disabledVariationValue: VariationValue
     variations: list[Variation]
@@ -110,6 +132,7 @@ class DatafileContent(TypedDict):
     featurevisorVersion: NotRequired[str]
     segments: dict[SegmentKey, Segment]
     features: dict[FeatureKey, Feature]
+    variables: NotRequired[dict[VariableKey, GlobalVariable]]
 
 
 class Evaluation(TypedDict, total=False):
@@ -125,13 +148,17 @@ class Evaluation(TypedDict, total=False):
     forceIndex: int
     force: Force
     required: list[str | RequiredFeatureRef]
+    requiredFeatures: str | RequiredFeature | list[str | RequiredFeature]
     sticky: EvaluatedFeature
     variation: Variation
     variationValue: VariationValue
     variableKey: VariableKey
     variableValue: VariableValue
     variableSchema: VariableSchema
+    variable: GlobalVariable
     variableOverrideIndex: int
+    variableOverrideKey: str
+    variableOverridePath: list[str]
 
 
 class FeaturevisorDiagnostic(TypedDict, total=False):
@@ -150,6 +177,8 @@ class FeaturevisorModule(TypedDict, total=False):
     bucketKey: Callable[[dict[str, Any]], BucketKey]
     bucketValue: Callable[[dict[str, Any]], BucketValue]
     after: Callable[[Evaluation, dict[str, Any]], Evaluation]
+    beforeEvaluation: Callable[[dict[str, Any]], dict[str, Any]]
+    afterEvaluation: Callable[[Evaluation, dict[str, Any]], Evaluation]
     setup: Callable[[dict[str, Any]], None]
     close: Callable[[], None]
 

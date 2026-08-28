@@ -69,6 +69,17 @@ def datafile():
             ),
             "emptyVariation": feature(variations=[]),
         },
+        "variables": {
+            "supportEmail": {
+                "type": "string", "defaultValue": "support@example.com",
+                "overrides": [{
+                    "key": "netherlands", "keyPath": ["europe", "netherlands"],
+                    "conditions": {"attribute": "country", "operator": "equals", "value": "nl"},
+                    "value": "nl@example.com",
+                }],
+            },
+            "limits": {"type": "object", "defaultValue": {"requests": 10}},
+        },
     }
 
 
@@ -143,6 +154,29 @@ class OpenFeatureProviderTest(unittest.TestCase):
         provider = self.provider(key_separator="/", variation_key="$variation")
         self.assertEqual(provider.resolve_string_details("checkout/$variation", "fallback").value, "on")
         self.assertEqual(provider.resolve_string_details("checkout/title", "fallback").value, "Hello")
+
+    def test_resolves_global_variables_and_custom_prefix(self):
+        provider = self.provider()
+        result = provider.resolve_string_details(
+            "variable:supportEmail", "fallback", EvaluationContext(attributes={"country": "nl"})
+        )
+        self.assertEqual(result.value, "nl@example.com")
+        self.assertEqual(result.reason, Reason.TARGETING_MATCH)
+        self.assertEqual(result.flag_metadata["variableKey"], "supportEmail")
+        self.assertEqual(result.flag_metadata["variableOverrideKey"], "netherlands")
+        self.assertEqual(provider.resolve_object_details("variable:limits", {}).value, {"requests": 10})
+
+        custom = self.provider(key_separator="/", global_variable_prefix="$variable")
+        self.assertEqual(custom.resolve_string_details("$variable/supportEmail", "fallback").value, "support@example.com")
+
+    def test_rejects_global_prefix_containing_separator(self):
+        with self.assertRaisesRegex(ValueError, "global_variable_prefix cannot contain key_separator"):
+            self.provider(global_variable_prefix="global:variable")
+
+    def test_missing_global_variable_uses_standard_not_found_error(self):
+        result = self.provider().resolve_string_details("variable:missing", "fallback")
+        self.assertEqual(result.value, "fallback")
+        self.assertEqual(result.error_code, ErrorCode.FLAG_NOT_FOUND)
 
     def test_returns_defaults_and_standard_errors_for_missing_entities_and_malformed_datafiles(self):
         provider = self.provider()

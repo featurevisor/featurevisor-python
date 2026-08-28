@@ -110,7 +110,8 @@ We can evaluate 3 types of values against a particular [feature](https://feature
 
 - [**Flag**](#check-if-enabled) (`bool`): whether the feature is enabled or not
 - [**Variation**](#getting-variation) (`string`): the variation of the feature (if any)
-- [**Variables**](#getting-variables): variable values of the feature (if any)
+- [**Feature variables**](#getting-feature-variables): variable values owned by a feature
+- [**Global variables**](#getting-global-variables): independently evaluated project values
 
 ## Context
 
@@ -169,7 +170,8 @@ You can also pass additional per-evaluation context:
 ```python
 is_enabled = f.is_enabled("my_feature", {"country": "nl"})
 variation = f.get_variation("my_feature", {"country": "nl"})
-variable_value = f.get_variable("my_feature", "my_variable", {"country": "nl"})
+feature_variable = f.get_variable("my_feature", "my_variable", {"country": "nl"})
+global_variable = f.get_variable("supportEmail", {"country": "nl"})
 ```
 
 ## Check if enabled
@@ -188,11 +190,22 @@ if variation == "treatment":
     pass
 ```
 
-## Getting variables
+## Getting feature variables
 
 ```python
 bg_color = f.get_variable("my_feature", "bgColor")
 ```
+
+## Getting global variables
+
+Global variables use the same methods without a feature key:
+
+```python
+support_email = f.get_variable("supportEmail", {"country": "nl"})
+evaluation = f.evaluate_variable("supportEmail", {"country": "nl"})
+```
+
+Global variables honour sticky values, required features, and the first matching override. When an override contains both conditions and segments, both must match.
 
 ### Type specific methods
 
@@ -208,13 +221,23 @@ f.get_variable_object(feature_key, variable_key, context={})
 f.get_variable_json(feature_key, variable_key, context={})
 ```
 
-Type specific methods do not coerce values. `get_variable_integer()` returns `None` for the string `"1"`, and boolean getters return `None` for non-boolean values.
-
-## Getting all evaluations
+The same helpers evaluate global variables when the feature key is omitted:
 
 ```python
-all_evaluations = f.get_all_evaluations()
+f.get_variable_string("supportEmail", context={})
+f.get_variable_object("checkoutSettings", context={})
 ```
+
+Type specific methods do not coerce values. `get_variable_integer()` returns `None` for the string `"1"`, and boolean getters return `None` for non-boolean values.
+
+## Getting evaluation snapshots
+
+```python
+features = f.get_feature_evaluations()
+variables = f.get_variable_evaluations()
+```
+
+`get_all_evaluations()` remains an alias for `get_feature_evaluations()`.
 
 ## Sticky
 
@@ -222,19 +245,22 @@ all_evaluations = f.get_all_evaluations()
 
 You can pin feature evaluations with sticky values:
 
-Sticky values belong to an SDK or child instance. Evaluation options do not accept sticky overrides; use `spawn(context, {"sticky": ...})` when a child needs its own sticky state.
+Sticky values belong to an SDK or child instance. Evaluation options do not accept sticky overrides. Pass `stickyFeatures` or `stickyVariables` when a child needs its own state.
 
 ```python
 f = create_featurevisor({
-    "sticky": {
+    "stickyFeatures": {
         "myFeatureKey": {
             "enabled": True,
             "variation": "treatment",
             "variables": {
                 "myVariableKey": "myVariableValue",
             },
-        }
-    }
+        },
+    },
+    "stickyVariables": {
+        "supportEmail": "sticky@example.com",
+    },
 })
 ```
 
@@ -243,12 +269,16 @@ f = create_featurevisor({
 Or update them later:
 
 ```python
-f.set_sticky({
+f.set_sticky_features({
     "myFeatureKey": {
         "enabled": False,
     }
 })
+
+f.set_sticky_variables({"supportEmail": "new@example.com"})
 ```
+
+`sticky` and `set_sticky()` remain aliases for feature sticky values.
 
 ## Setting datafile
 
@@ -437,6 +467,8 @@ And optionally these properties depending on whether you are evaluating a featur
 - `variableValue`: the variable value
 - `variableSchema`: the variable schema
 - `variableOverrideIndex`: index of matched variable override when applicable
+- `variableOverrideKey`: key of the matched variable override when available
+- `variableOverridePath`: nested authoring path of the matched global variable override
 
 ## Modules
 
@@ -447,6 +479,8 @@ Modules can intercept evaluation and participate in SDK lifecycle:
 - `bucketKey`
 - `bucketValue`
 - `after`
+- `beforeEvaluation`
+- `afterEvaluation`
 - `close`
 
 ### Defining a module
@@ -456,12 +490,16 @@ my_module = {
     "name": "my-module",
     "setup": lambda api: api["onDiagnostic"](lambda diagnostic: print(diagnostic)),
     "before": lambda options: {**options, "context": {**options["context"], "country": "nl"}},
+    "beforeEvaluation": lambda options: options,
     "bucketKey": lambda options: options["bucketKey"],
     "bucketValue": lambda options: options["bucketValue"],
     "after": lambda evaluation, options: evaluation,
+    "afterEvaluation": lambda evaluation, options: evaluation,
     "close": lambda: None,
 }
 ```
+
+`beforeEvaluation` and `afterEvaluation` receive both feature and global variable evaluations. The older `before` and `after` callbacks only apply to feature evaluations.
 
 The module API passed to `setup` exposes `getRevision`, `onDiagnostic`, and `reportDiagnostic`.
 
@@ -493,6 +531,7 @@ child.is_enabled("my_feature")
 child.evaluate_flag("my_feature")
 child.evaluate_variation("my_feature")
 child.evaluate_variable("my_feature", "my_variable")
+child.evaluate_variable("supportEmail")
 ```
 
 ## Close
@@ -571,6 +610,16 @@ python -m featurevisor benchmark \
   --context='{"userId":"123"}'
 ```
 
+For a global variable, omit `--feature`:
+
+```bash
+python -m featurevisor benchmark \
+  --projectDirectoryPath=/path/to/featurevisor-project \
+  --environment=production \
+  --variable=supportEmail \
+  --context='{"country":"nl"}'
+```
+
 ### Assess distribution
 
 Inspect enabled/disabled and variation distribution over repeated evaluations:
@@ -634,6 +683,7 @@ Call `api.shutdown()` during application shutdown. This closes a Featurevisor in
 | `checkout` | Boolean flag for `checkout` |
 | `checkout:variation` | Variation value for `checkout` |
 | `checkout:title` | Variable `title` for `checkout` |
+| `variable:supportEmail` | Global variable `supportEmail` |
 
 Boolean variables use the boolean resolver. Integer and double variables use their matching numeric resolvers. Arrays, objects, and JSON variables use the object resolver.
 
@@ -644,10 +694,11 @@ provider = FeaturevisorOpenFeatureProvider(
     {"datafile": datafile_content},
     key_separator="/",
     variation_key="$variation",
+    global_variable_prefix="$variable",
 )
 ```
 
-This makes `checkout/$variation` the variation key and `checkout/title` a variable key.
+This makes `checkout/$variation` the variation key, `checkout/title` a feature variable key, and `$variable/supportEmail` a global variable key. The global prefix defaults to `variable` and cannot contain the separator.
 
 ### Context mapping
 
@@ -679,7 +730,7 @@ The provider maps Featurevisor evaluation results to OpenFeature details:
 
 Errors return the default value supplied to OpenFeature. A malformed datafile uses the stable message `Could not parse datafile`. A later successful `set_datafile` call clears the parse error.
 
-Resolution metadata can include `featureKey`, `variableKey`, `featurevisorReason`, `revision`, `schemaVersion`, `ruleKey`, `bucketKey`, `bucketValue`, `forceIndex`, and `variableOverrideIndex`. The selected variation is exposed as the OpenFeature variant when available.
+Resolution metadata can include `featureKey`, `variableKey`, `featurevisorReason`, `revision`, `schemaVersion`, `ruleKey`, `bucketKey`, `bucketValue`, `forceIndex`, `variableOverrideIndex`, and `variableOverrideKey`. The selected variation is exposed as the OpenFeature variant when available.
 
 ### Tracking
 

@@ -35,12 +35,16 @@ class FeaturevisorOpenFeatureProvider(AbstractProvider):
         targeting_key_field: str = "userId",
         key_separator: str = ":",
         variation_key: str = "variation",
+        global_variable_prefix: str = "variable",
         on_track: Callable[[str, EvaluationContext | None, TrackingEventDetails | None], None] | None = None,
     ) -> None:
         super().__init__()
         self.targeting_key_field = targeting_key_field or "userId"
         self.key_separator = key_separator or ":"
         self.variation_key = variation_key or "variation"
+        self.global_variable_prefix = global_variable_prefix or "variable"
+        if self.key_separator in self.global_variable_prefix:
+            raise ValueError("global_variable_prefix cannot contain key_separator")
         self.on_track = on_track
         self.datafile_error: str | None = None
         self._owns_featurevisor = featurevisor is None
@@ -108,7 +112,16 @@ class FeaturevisorOpenFeatureProvider(AbstractProvider):
         selector: str | None = parsed_selector if separator else None
         context = self._context(evaluation_context)
 
-        if not selector:
+        if feature_key == self.global_variable_prefix and selector:
+            evaluation = self.featurevisor.evaluate_variable(selector, context)
+            value = evaluation.get("variableValue")
+            variable = evaluation.get("variable") or {}
+            if variable.get("type") == "json" and isinstance(value, str):
+                try:
+                    value = json.loads(value)
+                except (TypeError, ValueError):
+                    pass
+        elif not selector:
             if expected_type != "boolean":
                 return self._type_mismatch(flag_key, default_value, expected_type)
             evaluation = self.featurevisor.evaluate_flag(feature_key, context)
@@ -151,14 +164,15 @@ class FeaturevisorOpenFeatureProvider(AbstractProvider):
 
     def _metadata(self, evaluation: dict[str, Any]) -> dict[str, bool | int | float | str]:
         metadata: dict[str, bool | int | float | str] = {
-            "featureKey": evaluation["featureKey"],
             "featurevisorReason": evaluation["reason"],
             "schemaVersion": self.featurevisor.get_schema_version(),
         }
+        if evaluation.get("featureKey") is not None:
+            metadata["featureKey"] = evaluation["featureKey"]
         revision = self.featurevisor.get_revision()
         if revision:
             metadata["revision"] = revision
-        for key in ("variableKey", "ruleKey", "bucketKey", "bucketValue", "forceIndex", "variableOverrideIndex"):
+        for key in ("variableKey", "ruleKey", "bucketKey", "bucketValue", "forceIndex", "variableOverrideIndex", "variableOverrideKey"):
             if evaluation.get(key) is not None:
                 metadata[key] = evaluation[key]
         return metadata
@@ -167,7 +181,7 @@ class FeaturevisorOpenFeatureProvider(AbstractProvider):
     def _reason(reason: str | None) -> Reason:
         if reason in {"feature_not_found", "variable_not_found", "no_variations", "error"}:
             return Reason.ERROR
-        if reason in {"required", "forced", "sticky", "rule", "variable_override_variation", "variable_override_rule"}:
+        if reason in {"required", "required_features_unmet", "forced", "sticky", "rule", "variable_override_variation", "variable_override_rule"}:
             return Reason.TARGETING_MATCH
         if reason == "allocated":
             return Reason.SPLIT
@@ -191,7 +205,9 @@ class FeaturevisorOpenFeatureProvider(AbstractProvider):
         if evaluation.get("reason") == "feature_not_found":
             return f'Feature "{evaluation["featureKey"]}" was not found'
         if evaluation.get("reason") == "variable_not_found":
-            return f'Variable "{evaluation.get("variableKey")}" was not found for feature "{evaluation["featureKey"]}"'
+            if evaluation.get("featureKey"):
+                return f'Variable "{evaluation.get("variableKey")}" was not found for feature "{evaluation["featureKey"]}"'
+            return f'Global variable "{evaluation.get("variableKey")}" was not found'
         if evaluation.get("reason") == "no_variations":
             return f'Feature "{evaluation["featureKey"]}" has no variations'
         return "Featurevisor evaluation failed"

@@ -16,6 +16,8 @@ class FeaturevisorModule:
         self.bucket_key = options.get("bucketKey") or options.get("bucket_key")
         self.bucket_value = options.get("bucketValue") or options.get("bucket_value")
         self.after = options.get("after")
+        self.before_evaluation = options.get("beforeEvaluation") or options.get("before_evaluation")
+        self.after_evaluation = options.get("afterEvaluation") or options.get("after_evaluation")
         self.close = options.get("close")
 
     def call_setup(self, api: dict[str, Any]) -> None:
@@ -41,6 +43,16 @@ class FeaturevisorModule:
         if not self.after:
             return evaluation
         return self.after(evaluation, options)
+
+    def call_before_evaluation(self, options: dict[str, Any]) -> dict[str, Any]:
+        if not self.before_evaluation:
+            return options
+        return self.before_evaluation(options)
+
+    def call_after_evaluation(self, evaluation: dict[str, Any], options: dict[str, Any]) -> dict[str, Any]:
+        if not self.after_evaluation:
+            return evaluation
+        return self.after_evaluation(evaluation, options)
 
     def call_close(self) -> None:
         if self.close:
@@ -132,6 +144,12 @@ class ModulesManager:
             current = module.call_before(current)
         return current
 
+    def run_before_evaluation_modules(self, options: dict[str, Any]) -> dict[str, Any]:
+        current = options
+        for module in self.modules:
+            current = module.call_before_evaluation(current)
+        return current
+
     def run_bucket_key_modules(self, options: dict[str, Any]) -> str:
         bucket_key = options["bucketKey"]
         for module in self.modules:
@@ -148,6 +166,12 @@ class ModulesManager:
         current = evaluation
         for module in self.modules:
             current = module.call_after(current, options)
+        return current
+
+    def run_after_evaluation_modules(self, evaluation: dict[str, Any], options: dict[str, Any]) -> dict[str, Any]:
+        current = evaluation
+        for module in self.modules:
+            current = module.call_after_evaluation(current, options)
         return current
 
     def close_all(self) -> None:
@@ -178,7 +202,9 @@ class ModulesManager:
 
     getAll = get_all
     runBeforeModules = run_before_modules
+    runBeforeEvaluationModules = run_before_evaluation_modules
     runBucketKeyModules = run_bucket_key_modules
     runBucketValueModules = run_bucket_value_modules
     runAfterModules = run_after_modules
+    runAfterEvaluationModules = run_after_evaluation_modules
     closeAll = close_all
