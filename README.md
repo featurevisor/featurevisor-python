@@ -334,7 +334,7 @@ load_datafile("checkout")
 
 ### Updating datafile
 
-You can set the datafile as many times as you want in your application, which will emit a [`datafile_set`](#datafile_set) event that you can listen and react to accordingly.
+You can set the datafile as many times as you want in your application, which will emit a [`datafile_set`](#datafile-set) event that you can listen and react to accordingly.
 
 ### Interval-based update
 
@@ -386,7 +386,7 @@ f = create_featurevisor({
 
 Every diagnostic has `level`, `code`, `message`, and an object-shaped `details` dictionary. Optional `module`, `moduleName`, and `originalError` fields describe provenance. Evaluation metadata belongs in `details`.
 
-Diagnostic handlers are isolated from SDK behavior. An exception in a handler does not stop other handlers or evaluations.
+Diagnostic handlers are isolated from SDK behaviour. An exception in a handler does not stop other handlers or evaluations.
 
 
 ## Events
@@ -501,6 +501,8 @@ my_module = {
 
 For feature evaluations, all `before` callbacks run in registration order, followed by all `beforeEvaluation` callbacks. After evaluation and caller defaults, all `afterEvaluation` callbacks run, followed by all `after` callbacks. Global variable evaluations use only `beforeEvaluation` and `afterEvaluation`. Required feature checks run through the complete module pipeline, and transformed defaults are preserved.
 
+`before` and `after` remain available as deprecated feature-only compatibility callbacks. Use `beforeEvaluation` and `afterEvaluation` for new modules so the same callbacks can handle feature and global variable evaluations.
+
 The module API passed to `setup` exposes `getRevision`, `onDiagnostic`, and `reportDiagnostic`.
 
 If `setup` raises an exception, the module is not registered. Featurevisor removes subscriptions created during setup, reports `module_setup_error`, and calls `close` when present.
@@ -552,7 +554,7 @@ python -m featurevisor assess-distribution
 
 These commands are intended for use from inside a Featurevisor project and rely on `npx featurevisor` being available locally.
 
-All three commands accept repeatable `--target=<target>` options. `test` builds only the selected Target datafiles and runs untargeted assertions plus assertions for those targets. `benchmark` and `assess-distribution` run independently against every selected Target datafile. Without `--target`, existing project-wide behavior is preserved. Project definitions, test specs, Target discovery, and datafile generation continue to come from the Node.js CLI.
+All three commands accept repeatable `--target=<target>` options. `test` builds only the selected Target datafiles and runs untargeted assertions plus assertions for those targets. `benchmark` and `assess-distribution` run independently against every selected Target datafile. Without `--target`, existing project-wide behaviour is preserved. Project definitions, test specs, Target discovery, and datafile generation continue to come from the Node.js CLI.
 
 ### Test
 
