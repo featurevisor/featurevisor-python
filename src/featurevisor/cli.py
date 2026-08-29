@@ -58,8 +58,8 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 0 if ok else 1
     if args.command == "benchmark":
-        if not args.environment or not args.feature:
-            parser.error("benchmark requires --environment and --feature")
+        if not args.environment or (not args.feature and not args.variable) or (args.variation and not args.feature):
+            parser.error("benchmark requires --environment and either --feature or --variable")
         return run_benchmark(
             args.projectDirectoryPath,
             environment=args.environment,

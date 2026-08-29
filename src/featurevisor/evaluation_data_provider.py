@@ -17,6 +17,7 @@ class _InstanceEvaluationDataProvider:
         self.featurevisor_version = datafile.get("featurevisorVersion")
         self.segments = datafile.get("segments", {})
         self.features = datafile.get("features", {})
+        self.variables = datafile.get("variables", {})
         self.regex_cache: dict[str, re.Pattern[str]] = {}
 
     def get_revision(self) -> str:
@@ -32,6 +33,7 @@ class _InstanceEvaluationDataProvider:
             "featurevisorVersion": self.featurevisor_version,
             "segments": self.segments,
             "features": self.features,
+            "variables": self.variables,
         }
         return {key: value for key, value in datafile.items() if value is not None}
 
@@ -48,9 +50,17 @@ class _InstanceEvaluationDataProvider:
     def get_feature(self, feature_key: str) -> Feature | None:
         return self.features.get(feature_key)
 
-    def get_variable_keys(self, feature_key: str) -> list[str]:
+    def get_variable_keys(self, feature_key: str | None = None) -> list[str]:
+        if feature_key is None:
+            return list(self.variables.keys())
         feature = self.get_feature(feature_key)
         return list((feature or {}).get("variablesSchema", {}).keys())
+
+    def get_global_variable(self, variable_key: str):
+        return self.variables.get(variable_key)
+
+    def get_segment_keys(self) -> list[str]:
+        return list(self.segments.keys())
 
     def has_variations(self, feature_key: str) -> bool:
         feature = self.get_feature(feature_key)
@@ -168,6 +178,8 @@ class _InstanceEvaluationDataProvider:
     getFeatureKeys = get_feature_keys
     getFeature = get_feature
     getVariableKeys = get_variable_keys
+    getGlobalVariable = get_global_variable
+    getSegmentKeys = get_segment_keys
     hasVariations = has_variations
     getRegex = get_regex
     allConditionsAreMatched = all_conditions_are_matched

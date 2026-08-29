@@ -19,10 +19,11 @@ This SDK is compatible with Featurevisor v3 projects and v2 datafiles.
   - [Manually passing context](#manually-passing-context)
 - [Check if enabled](#check-if-enabled)
 - [Getting variation](#getting-variation)
-- [Getting variables](#getting-variables)
-  - [Type specific methods](#type-specific-methods)
-- [Getting all evaluations](#getting-all-evaluations)
-- [Sticky](#sticky)
+- [Getting feature variables](#getting-feature-variables)
+- [Getting global variables](#getting-global-variables)
+- [Type specific methods](#type-specific-methods)
+- [Getting evaluation snapshots](#getting-evaluation-snapshots)
+- [Sticky features and variables](#sticky-features-and-variables)
   - [Initialize with sticky](#initialize-with-sticky)
   - [Set sticky afterwards](#set-sticky-afterwards)
 - [Setting datafile](#setting-datafile)
@@ -37,7 +38,7 @@ This SDK is compatible with Featurevisor v3 projects and v2 datafiles.
 - [Events](#events)
   - [`datafile_set`](#datafile_set)
   - [`context_set`](#context_set)
-  - [`sticky_set`](#sticky_set)
+  - [`sticky_features_set` and `sticky_variables_set`](#sticky_features_set-and-sticky_variables_set)
   - [`error`](#error)
 - [Modules](#modules)
   - [Defining a module](#defining-a-module)
@@ -82,7 +83,7 @@ f: Featurevisor = create_featurevisor({
 
 Most applications only need `create_featurevisor` and the `Featurevisor` instance type. Public extension and observability APIs include `FeaturevisorModule`, diagnostics, events, and the datafile dictionaries accepted by the factory.
 
-Concurrent evaluations are safe after an instance is configured. Do not mutate or close the same instance concurrently with evaluations. Serialize calls to `set_datafile`, `set_context`, `set_sticky`, `add_module`, `remove_module`, and `close`. Module, event, and diagnostic callbacks must synchronize mutable state that they capture.
+Concurrent evaluations are safe after an instance is configured. Do not mutate or close the same instance concurrently with evaluations. Serialize calls to `set_datafile`, `set_context`, `set_sticky_features`, `set_sticky_variables`, `add_module`, `remove_module`, and `close`. Module, event, and diagnostic callbacks must synchronize mutable state that they capture.
 
 ## Initialization
 
@@ -106,11 +107,12 @@ f = create_featurevisor({
 
 ## Evaluation types
 
-We can evaluate 3 types of values against a particular [feature](https://featurevisor.com/docs/features/):
+Featurevisor evaluates flags, variations, feature variables, and global variables:
 
 - [**Flag**](#check-if-enabled) (`bool`): whether the feature is enabled or not
 - [**Variation**](#getting-variation) (`string`): the variation of the feature (if any)
-- [**Variables**](#getting-variables): variable values of the feature (if any)
+- [**Feature variables**](#getting-feature-variables): variable values owned by a feature
+- [**Global variables**](#getting-global-variables): independently evaluated project values
 
 ## Context
 
@@ -169,7 +171,8 @@ You can also pass additional per-evaluation context:
 ```python
 is_enabled = f.is_enabled("my_feature", {"country": "nl"})
 variation = f.get_variation("my_feature", {"country": "nl"})
-variable_value = f.get_variable("my_feature", "my_variable", {"country": "nl"})
+feature_variable = f.get_variable("my_feature", "my_variable", {"country": "nl"})
+global_variable = f.get_variable("supportEmail", {"country": "nl"})
 ```
 
 ## Check if enabled
@@ -188,13 +191,24 @@ if variation == "treatment":
     pass
 ```
 
-## Getting variables
+## Getting feature variables
 
 ```python
 bg_color = f.get_variable("my_feature", "bgColor")
 ```
 
-### Type specific methods
+## Getting global variables
+
+Global variables use the same methods without a feature key:
+
+```python
+support_email = f.get_variable("supportEmail", {"country": "nl"})
+evaluation = f.evaluate_variable("supportEmail", {"country": "nl"})
+```
+
+Global variables honour sticky values, required features, and the first matching override. When an override contains both conditions and segments, both must match.
+
+## Type specific methods
 
 Typed convenience methods are also available:
 
@@ -208,33 +222,44 @@ f.get_variable_object(feature_key, variable_key, context={})
 f.get_variable_json(feature_key, variable_key, context={})
 ```
 
-Type specific methods do not coerce values. `get_variable_integer()` returns `None` for the string `"1"`, and boolean getters return `None` for non-boolean values.
-
-## Getting all evaluations
+The same helpers evaluate global variables when the feature key is omitted:
 
 ```python
-all_evaluations = f.get_all_evaluations()
+f.get_variable_string("supportEmail", context={})
+f.get_variable_object("checkoutSettings", context={})
 ```
 
-## Sticky
+Type specific methods do not coerce values. `get_variable_integer()` returns `None` for the string `"1"`, and boolean getters return `None` for non-boolean values.
+
+## Getting evaluation snapshots
+
+```python
+features = f.get_feature_evaluations()
+variables = f.get_variable_evaluations()
+```
+
+## Sticky features and variables
 
 ### Initialize with sticky
 
 You can pin feature evaluations with sticky values:
 
-Sticky values belong to an SDK or child instance. Evaluation options do not accept sticky overrides; use `spawn(context, {"sticky": ...})` when a child needs its own sticky state.
+Sticky values belong to an SDK or child instance. Evaluation options do not accept sticky overrides. Pass `stickyFeatures` or `stickyVariables` when a child needs its own state.
 
 ```python
 f = create_featurevisor({
-    "sticky": {
+    "stickyFeatures": {
         "myFeatureKey": {
             "enabled": True,
             "variation": "treatment",
             "variables": {
                 "myVariableKey": "myVariableValue",
             },
-        }
-    }
+        },
+    },
+    "stickyVariables": {
+        "supportEmail": "sticky@example.com",
+    },
 })
 ```
 
@@ -243,11 +268,13 @@ f = create_featurevisor({
 Or update them later:
 
 ```python
-f.set_sticky({
+f.set_sticky_features({
     "myFeatureKey": {
         "enabled": False,
     }
 })
+
+f.set_sticky_variables({"supportEmail": "new@example.com"})
 ```
 
 ## Setting datafile
@@ -389,10 +416,13 @@ unsubscribe = f.on("context_set", lambda event: print(event["context"]))
 unsubscribe()
 ```
 
-### `sticky_set`
+### `sticky_features_set` and `sticky_variables_set`
 
 ```python
-unsubscribe = f.on("sticky_set", lambda event: print(event["features"]))
+unsubscribe = f.on("sticky_features_set", lambda event: print(event["features"]))
+unsubscribe()
+
+unsubscribe = f.on("sticky_variables_set", lambda event: print(event["variables"]))
 unsubscribe()
 ```
 
@@ -437,6 +467,8 @@ And optionally these properties depending on whether you are evaluating a featur
 - `variableValue`: the variable value
 - `variableSchema`: the variable schema
 - `variableOverrideIndex`: index of matched variable override when applicable
+- `variableOverrideKey`: key of the matched variable override when available
+- `variableOverridePath`: nested authoring path of the matched global variable override
 
 ## Modules
 
@@ -447,6 +479,8 @@ Modules can intercept evaluation and participate in SDK lifecycle:
 - `bucketKey`
 - `bucketValue`
 - `after`
+- `beforeEvaluation`
+- `afterEvaluation`
 - `close`
 
 ### Defining a module
@@ -456,12 +490,16 @@ my_module = {
     "name": "my-module",
     "setup": lambda api: api["onDiagnostic"](lambda diagnostic: print(diagnostic)),
     "before": lambda options: {**options, "context": {**options["context"], "country": "nl"}},
+    "beforeEvaluation": lambda options: options,
     "bucketKey": lambda options: options["bucketKey"],
     "bucketValue": lambda options: options["bucketValue"],
     "after": lambda evaluation, options: evaluation,
+    "afterEvaluation": lambda evaluation, options: evaluation,
     "close": lambda: None,
 }
 ```
+
+For feature evaluations, all `before` callbacks run in registration order, followed by all `beforeEvaluation` callbacks. After evaluation and caller defaults, all `afterEvaluation` callbacks run, followed by all `after` callbacks. Global variable evaluations use only `beforeEvaluation` and `afterEvaluation`. Required feature checks run through the complete module pipeline, and transformed defaults are preserved.
 
 The module API passed to `setup` exposes `getRevision`, `onDiagnostic`, and `reportDiagnostic`.
 
@@ -493,6 +531,7 @@ child.is_enabled("my_feature")
 child.evaluate_flag("my_feature")
 child.evaluate_variation("my_feature")
 child.evaluate_variable("my_feature", "my_variable")
+child.evaluate_variable("supportEmail")
 ```
 
 ## Close
@@ -571,6 +610,16 @@ python -m featurevisor benchmark \
   --context='{"userId":"123"}'
 ```
 
+For a global variable, omit `--feature`:
+
+```bash
+python -m featurevisor benchmark \
+  --projectDirectoryPath=/path/to/featurevisor-project \
+  --environment=production \
+  --variable=supportEmail \
+  --context='{"country":"nl"}'
+```
+
 ### Assess distribution
 
 Inspect enabled/disabled and variation distribution over repeated evaluations:
@@ -634,6 +683,7 @@ Call `api.shutdown()` during application shutdown. This closes a Featurevisor in
 | `checkout` | Boolean flag for `checkout` |
 | `checkout:variation` | Variation value for `checkout` |
 | `checkout:title` | Variable `title` for `checkout` |
+| `variable:supportEmail` | Global variable `supportEmail` |
 
 Boolean variables use the boolean resolver. Integer and double variables use their matching numeric resolvers. Arrays, objects, and JSON variables use the object resolver.
 
@@ -644,10 +694,11 @@ provider = FeaturevisorOpenFeatureProvider(
     {"datafile": datafile_content},
     key_separator="/",
     variation_key="$variation",
+    global_variable_prefix="$variable",
 )
 ```
 
-This makes `checkout/$variation` the variation key and `checkout/title` a variable key.
+This makes `checkout/$variation` the variation key, `checkout/title` a feature variable key, and `$variable/supportEmail` a global variable key. The global prefix defaults to `variable` and cannot contain the separator.
 
 ### Context mapping
 
@@ -668,9 +719,9 @@ The provider maps Featurevisor evaluation results to OpenFeature details:
 
 | Featurevisor result | OpenFeature result |
 | --- | --- |
-| Required, forced, sticky, or rule match | `TARGETING_MATCH` |
+| Required feature rule, forced, sticky, or rule match | `TARGETING_MATCH` |
 | Traffic allocation | `SPLIT` |
-| Disabled variation or variable | `DISABLED` |
+| Unmet global variable requirements, disabled variation, or disabled variable | `DISABLED` |
 | No match or variable default | `DEFAULT` |
 | Missing feature, variable, or variations | `ERROR` with `FLAG_NOT_FOUND` |
 | Wrong resolver type | `ERROR` with `TYPE_MISMATCH` |
@@ -679,7 +730,7 @@ The provider maps Featurevisor evaluation results to OpenFeature details:
 
 Errors return the default value supplied to OpenFeature. A malformed datafile uses the stable message `Could not parse datafile`. A later successful `set_datafile` call clears the parse error.
 
-Resolution metadata can include `featureKey`, `variableKey`, `featurevisorReason`, `revision`, `schemaVersion`, `ruleKey`, `bucketKey`, `bucketValue`, `forceIndex`, and `variableOverrideIndex`. The selected variation is exposed as the OpenFeature variant when available.
+Resolution metadata can include `featureKey`, `variableKey`, `featurevisorReason`, `revision`, `schemaVersion`, `ruleKey`, `bucketKey`, `bucketValue`, `forceIndex`, `variableOverrideIndex`, and `variableOverrideKey`. The selected variation is exposed as the OpenFeature variant when available.
 
 ### Tracking
 

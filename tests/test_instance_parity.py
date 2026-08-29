@@ -99,13 +99,13 @@ class InstanceParityTests(unittest.TestCase):
             },
             "segments": {},
         }
-        sdk = create_featurevisor({"sticky": {"test": {"enabled": True, "variation": "control", "variables": {"color": "red"}}}, "logLevel": "fatal"})
+        sdk = create_featurevisor({"stickyFeatures": {"test": {"enabled": True, "variation": "control", "variables": {"color": "red"}}}, "logLevel": "fatal"})
         self.assertEqual(sdk.getVariation("test", {"userId": "123"}), "control")
         self.assertEqual(sdk.getVariable("test", "color", {"userId": "123"}), "red")
         sdk.setDatafile(datafile)
         time.sleep(0.08)
         self.assertEqual(sdk.getVariation("test", {"userId": "123"}), "control")
-        sdk.setSticky({}, True)
+        sdk.setStickyFeatures({}, True)
         self.assertEqual(sdk.getVariation("test", {"userId": "123"}), "treatment")
 
     def test_required_deprecated_and_rule_override_cases(self) -> None:
@@ -192,7 +192,7 @@ class InstanceParityTests(unittest.TestCase):
         self.assertEqual(sdk.getVariableJSON("test", "nestedConfig", {"userId": "123"}), {"key": {"nested": "value"}})
         self.assertIsNone(sdk.getVariable("test", "nonExisting", {"userId": "123"}))
         self.assertIsNone(sdk.getVariable("test", "color", {"userId": "user-gb"}))
-        all_evaluations = sdk.getAllEvaluations({"userId": "123"})
+        all_evaluations = sdk.getFeatureEvaluations({"userId": "123"})
         self.assertEqual(all_evaluations["test"]["variation"], "treatment")
 
     def test_variables_without_variations_rule_overrides_arrays_objects_and_individual_segments(self) -> None:
@@ -238,7 +238,7 @@ class InstanceParityTests(unittest.TestCase):
         self.assertEqual(sdk.getVariableArray("withArray", "objectArray", {"userId": "user-1"}), [{"color": "red", "opacity": 100}, {"color": "blue", "opacity": 90}, {"color": "green", "opacity": 95}])
         self.assertEqual(sdk.getVariableObject("withObject", "themeConfig", {"userId": "user-1"}), {"theme": "light", "darkMode": False})
         self.assertIsNone(sdk.getVariableArray("withArray", "nonExisting", {"userId": "user-1"}))
-        all_evaluations = sdk.getAllEvaluations({"userId": "user-1"})
+        all_evaluations = sdk.getFeatureEvaluations({"userId": "user-1"})
         self.assertEqual(all_evaluations["withObject"]["variables"]["mixedConfig"], {"name": "mixed", "enabled": True, "meta": {"score": 0.95, "items": ["a", "b"]}})
         self.assertFalse(sdk.isEnabled("flagTest"))
         self.assertFalse(sdk.isEnabled("flagTest", {"userId": "123"}))

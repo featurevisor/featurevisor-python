@@ -12,7 +12,7 @@ from featurevisor.bucketer import MAX_BUCKETED_NUMBER, get_bucket_key, get_bucke
 from featurevisor.compare_versions import compare_versions
 from featurevisor.conditions import condition_is_matched
 from featurevisor.evaluation_data_provider import _InstanceEvaluationDataProvider
-from featurevisor.events import get_params_for_datafile_set_event, get_params_for_sticky_set_event
+from featurevisor.events import get_params_for_datafile_set_event, get_params_for_sticky_features_set_event
 from featurevisor.emitter import Emitter
 from featurevisor.diagnostics import _create_evaluation_diagnostics
 
@@ -82,7 +82,7 @@ class SDKTests(unittest.TestCase):
         instance = create_featurevisor({"datafile": datafile, "context": {"userId": "123"}})
         self.assertTrue(instance.is_enabled("my_feature"))
         self.assertEqual(instance.get_variable("my_feature", "title"), "Hello")
-        self.assertEqual(instance.get_all_evaluations()["my_feature"]["variables"]["title"], "Hello")
+        self.assertEqual(instance.get_feature_evaluations()["my_feature"]["variables"]["title"], "Hello")
 
     def test_set_datafile_merges_by_default_and_replace_opt_in(self) -> None:
         instance = create_featurevisor(
@@ -142,12 +142,12 @@ class SDKTests(unittest.TestCase):
         instance = create_featurevisor({"logLevel": "debug", "onDiagnostic": lambda diagnostic: diagnostics.append(diagnostic)})
 
         instance.set_datafile({"schemaVersion": "2", "revision": "1", "segments": {}, "features": {}})
-        instance.set_sticky({"test": {"enabled": True}})
+        instance.set_sticky_features({"test": {"enabled": True}})
         instance.set_context({"country": "nl"})
 
         codes = [diagnostic["code"] for diagnostic in diagnostics]
         self.assertIn("datafile_set", codes)
-        self.assertIn("sticky_set", codes)
+        self.assertIn("sticky_features_set", codes)
         self.assertIn("context_set", codes)
 
     def test_module_lifecycle_duplicate_diagnostics_and_close(self) -> None:
@@ -337,7 +337,7 @@ class SDKTests(unittest.TestCase):
 
     def test_events_helpers(self) -> None:
         self.assertEqual(
-            get_params_for_sticky_set_event({"feature1": {"enabled": True}}, {"feature2": {"enabled": True}}, True),
+            get_params_for_sticky_features_set_event({"feature1": {"enabled": True}}, {"feature2": {"enabled": True}}, True),
             {"features": ["feature1", "feature2"], "replaced": True},
         )
         diagnostics = _create_evaluation_diagnostics()
@@ -345,7 +345,7 @@ class SDKTests(unittest.TestCase):
         current = _InstanceEvaluationDataProvider(datafile={"schemaVersion": "2", "revision": "2", "segments": {}, "features": {"feature1": {"bucketBy": "userId", "hash": "hash2", "traffic": []}, "feature2": {"bucketBy": "userId", "hash": "hash3", "traffic": []}}}, diagnostics=diagnostics)
         self.assertEqual(
             get_params_for_datafile_set_event(previous, current),
-            {"revision": "2", "previousRevision": "1", "revisionChanged": True, "features": ["feature1", "feature2"], "replaced": False},
+            {"revision": "2", "previousRevision": "1", "revisionChanged": True, "features": ["feature1", "feature2"], "variables": [], "replaced": False},
         )
 
     def test_emitter_subscribe_unsubscribe(self) -> None:
@@ -353,7 +353,7 @@ class SDKTests(unittest.TestCase):
         handled = []
         unsubscribe = emitter.on("datafile_set", lambda details: handled.append(details))
         emitter.trigger("datafile_set", {"key": "value"})
-        emitter.trigger("sticky_set", {"key": "value2"})
+        emitter.trigger("sticky_features_set", {"key": "value2"})
         self.assertEqual(handled, [{"key": "value"}])
         unsubscribe()
         self.assertEqual(len(emitter.listeners["datafile_set"]), 0)
@@ -372,11 +372,11 @@ class SDKTests(unittest.TestCase):
         def second(_details: dict) -> None:
             calls.append("second")
 
-        emitter.on("sticky_set", first)
-        unsubscribe_second = emitter.on("sticky_set", second)
+        emitter.on("sticky_features_set", first)
+        unsubscribe_second = emitter.on("sticky_features_set", second)
 
-        emitter.trigger("sticky_set")
-        emitter.trigger("sticky_set")
+        emitter.trigger("sticky_features_set")
+        emitter.trigger("sticky_features_set")
 
         self.assertEqual(calls, ["first", "second", "first"])
 
