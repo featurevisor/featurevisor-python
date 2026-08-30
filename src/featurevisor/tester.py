@@ -43,18 +43,26 @@ def _print_test_result(result: dict[str, Any], test_key: str) -> None:
             elif error["type"] == "variation":
                 section = "expectedVariation"
             elif error["type"] == "variable":
-                section = "expectedVariables"
+                section = "expectedValue" if result["type"] == "variable" else "expectedVariables"
             details = error.get("details") or {}
             if details.get("childIndex") is not None:
                 section = f"children[{details['childIndex']}].{section}"
-            if error["type"] == "variable":
+            if error["type"] == "variable" and result["type"] == "variable":
+                print(f"    => {section}:")
+                print(f"       => expected: {_stringify_value(error.get('expected'))}")
+                print(f"       => received: {_stringify_value(error.get('actual'))}")
+            elif error["type"] == "variable":
                 variable_key = details.get("variableKey")
                 print(f"    => {section}.{variable_key}:")
                 print(f"       => expected: {_stringify_value(error.get('expected'))}")
                 print(f"       => received: {_stringify_value(error.get('actual'))}")
             else:
                 if error["type"] == "evaluation":
-                    if details.get("variableKey"):
+                    if result["type"] == "variable":
+                        section = f"expectedEvaluation.{details['evaluationKey']}"
+                        if details.get("childIndex") is not None:
+                            section = f"children[{details['childIndex']}].{section}"
+                    elif details.get("variableKey"):
                         section = f"{section}.variables.{details['variableKey']}.{details['evaluationKey']}"
                     elif details.get("evaluationType"):
                         section = f"{section}.{details['evaluationType']}.{details['evaluationKey']}"
@@ -88,12 +96,10 @@ def _get_target_datafile_key(environment: str | bool | None, target: str) -> str
     return f"{environment}-target-{target}" if environment else f"false-target-{target}"
 
 
-def _get_datafile_for_assertion(assertion: dict[str, Any], cache: dict[Any, dict[str, Any]]) -> dict[str, Any]:
+def _get_datafile_for_assertion(assertion: dict[str, Any], cache: dict[Any, dict[str, Any]]) -> dict[str, Any] | None:
     key = _get_base_datafile_key(assertion)
     target_key = _get_target_datafile_key(key, assertion["target"]) if assertion.get("target") else None
-    if target_key and target_key in cache:
-        return cache[target_key]
-    return cache[key]
+    return cache.get(target_key if target_key else key)
 
 
 def _assert_feature(sdk, feature_key: str, assertion: dict[str, Any], datafile: dict[str, Any], result: dict[str, Any], assertion_result: dict[str, Any], *, child_index: int | None = None) -> None:
@@ -158,22 +164,35 @@ def _assert_feature(sdk, feature_key: str, assertion: dict[str, Any], datafile: 
                     assertion_result["errors"].append({"type": "evaluation", "expected": expected, "actual": actual, "details": {**details_base, "evaluationType": "variable", "evaluationKey": variable_key}})
 
 
-def _assert_global_variable(sdk, variable_key: str, assertion: dict[str, Any], result: dict[str, Any], assertion_result: dict[str, Any]) -> None:
-    context = assertion.get("context", {})
+def _assert_global_variable(sdk, variable_key: str, assertion: dict[str, Any], result: dict[str, Any], assertion_result: dict[str, Any], *, child_index: int | None = None) -> None:
     options = {}
     if "defaultVariableValue" in assertion:
         options["defaultVariableValue"] = assertion["defaultVariableValue"]
+    evaluation = sdk.evaluate_variable(variable_key, {}, options)
+    details: dict[str, Any] = {"variableKey": variable_key}
+    if child_index is not None:
+        details["childIndex"] = child_index
     if "expectedValue" in assertion:
-        actual = sdk.get_variable(variable_key, context, options)
+        actual = evaluation.get("variableValue")
         if not _compare_jsonish(assertion["expectedValue"], actual):
             result["passed"] = assertion_result["passed"] = False
-            assertion_result["errors"].append({"type": "variable", "expected": assertion["expectedValue"], "actual": actual, "details": {"variableKey": variable_key}})
+            assertion_result["errors"].append({"type": "variable", "expected": assertion["expectedValue"], "actual": actual, "details": details})
     for key, expected in assertion.get("expectedEvaluation", {}).items():
-        evaluation = sdk.evaluate_variable(variable_key, context, options)
         actual = _get_evaluation_value(evaluation, key)
         if not _compare_jsonish(expected, actual):
             result["passed"] = assertion_result["passed"] = False
-            assertion_result["errors"].append({"type": "evaluation", "expected": expected, "actual": actual, "details": {"variableKey": variable_key, "evaluationKey": key}})
+            assertion_result["errors"].append({"type": "evaluation", "expected": expected, "actual": actual, "details": {**details, "evaluationType": "variable", "evaluationKey": key}})
+
+
+def _missing_datafile_assertion(assertion: dict[str, Any]) -> dict[str, Any]:
+    environment = assertion.get("environment") or "none"
+    target = f' and target "{assertion["target"]}"' if assertion.get("target") else ""
+    return {
+        "description": assertion.get("description", ""),
+        "duration": 0,
+        "passed": False,
+        "errors": [{"type": "variable", "message": f'datafile not found for environment "{environment}"{target}'}],
+    }
 
 
 def test_segment(segment: dict[str, Any], assertion_options: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -248,17 +267,37 @@ def run_test_project(project_directory_path: str, *, key_pattern: str | None = N
             for assertion in assertions:
                 assertion_start = time.perf_counter()
                 datafile = _get_datafile_for_assertion(assertion, datafile_cache)
-                if variable_key not in datafile.get("variables", {}):
-                    result["notFound"] = True
+                if datafile is None:
                     result["passed"] = False
+                    result["assertions"].append(_missing_datafile_assertion(assertion))
                     continue
+                if show_datafile:
+                    print(json.dumps(datafile, indent=2))
                 sdk = create_featurevisor({
                     "datafile": datafile,
+                    "context": assertion.get("context", {}),
+                    "stickyFeatures": assertion.get("stickyFeatures", {}),
                     "stickyVariables": assertion.get("stickyVariables", {}),
+                    "modules": [{
+                        "name": "tester",
+                        "bucketValue": lambda opts, at=assertion.get("at"): int(at * 1000) if at is not None else opts["bucketValue"],
+                    }],
                     "logLevel": _log_level(verbose, quiet),
                 })
                 assertion_result = {"description": assertion.get("description", ""), "duration": 0, "passed": True, "errors": []}
-                _assert_global_variable(sdk, variable_key, assertion, result, assertion_result)
+                try:
+                    _assert_global_variable(sdk, variable_key, assertion, result, assertion_result)
+                    for index, child_assertion in enumerate(assertion.get("children", [])):
+                        child = sdk.spawn(child_assertion.get("context", {}), {
+                            "stickyFeatures": child_assertion.get("stickyFeatures", {}),
+                            "stickyVariables": child_assertion.get("stickyVariables", {}),
+                        })
+                        try:
+                            _assert_global_variable(child, variable_key, child_assertion, result, assertion_result, child_index=index)
+                        finally:
+                            child.close()
+                finally:
+                    sdk.close()
                 assertion_result["duration"] = int((time.perf_counter() - assertion_start) * 1000)
                 result["assertions"].append(assertion_result)
             result["duration"] = int((time.perf_counter() - variable_start) * 1000)
@@ -278,6 +317,10 @@ def run_test_project(project_directory_path: str, *, key_pattern: str | None = N
             for assertion in assertions:
                 assertion_start = time.perf_counter()
                 datafile = _get_datafile_for_assertion(assertion, datafile_cache)
+                if datafile is None:
+                    result["passed"] = False
+                    result["assertions"].append(_missing_datafile_assertion(assertion))
+                    continue
                 if show_datafile:
                     print(json.dumps(datafile, indent=2))
                 sdk = create_featurevisor({
@@ -296,13 +339,19 @@ def run_test_project(project_directory_path: str, *, key_pattern: str | None = N
                 if context:
                     sdk.set_context(context)
                 assertion_result = {"description": assertion.get("description", ""), "duration": 0, "passed": True, "errors": []}
-                _assert_feature(sdk, feature_key, {**assertion, "context": context}, datafile, result, assertion_result)
-                for index, child in enumerate(assertion.get("children", [])):
-                    child_instance = sdk.spawn(child.get("context", {}), {
-                        "stickyFeatures": child.get("stickyFeatures") or child.get("sticky") or assertion.get("stickyFeatures") or assertion.get("sticky"),
-                        "stickyVariables": child.get("stickyVariables") or assertion.get("stickyVariables"),
-                    })
-                    _assert_feature(child_instance, feature_key, child, datafile, result, assertion_result, child_index=index)
+                try:
+                    _assert_feature(sdk, feature_key, {**assertion, "context": context}, datafile, result, assertion_result)
+                    for index, child in enumerate(assertion.get("children", [])):
+                        child_instance = sdk.spawn(child.get("context", {}), {
+                            "stickyFeatures": child.get("stickyFeatures") or child.get("sticky") or assertion.get("stickyFeatures") or assertion.get("sticky"),
+                            "stickyVariables": child.get("stickyVariables") or assertion.get("stickyVariables"),
+                        })
+                        try:
+                            _assert_feature(child_instance, feature_key, child, datafile, result, assertion_result, child_index=index)
+                        finally:
+                            child_instance.close()
+                finally:
+                    sdk.close()
                 assertion_result["duration"] = int((time.perf_counter() - assertion_start) * 1000)
                 result["assertions"].append(assertion_result)
             result["duration"] = int((time.perf_counter() - feature_start) * 1000)

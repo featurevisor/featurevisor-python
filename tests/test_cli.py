@@ -53,6 +53,11 @@ class CLITests(unittest.TestCase):
         datafile = _get_datafile_for_assertion({"environment": "production", "target": "checkout"}, cache)
         self.assertEqual(datafile["kind"], "target")
 
+    def test_target_assertion_does_not_fall_back_to_base_datafile(self) -> None:
+        cache = {"production": {"kind": "base"}}
+        datafile = _get_datafile_for_assertion({"environment": "production", "target": "checkout"}, cache)
+        self.assertIsNone(datafile)
+
 
 if __name__ == "__main__":
     unittest.main()
