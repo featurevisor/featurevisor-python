@@ -307,6 +307,8 @@ class _InstanceEvaluationDataProvider:
                 self.prepared_expression_cache[conditions] = prepared
                 return prepared
             return parsed
+        except RecursionError:
+            raise
         except Exception as exc:
             if raise_errors:
                 raise

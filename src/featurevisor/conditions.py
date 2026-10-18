@@ -9,7 +9,7 @@ from .compare_versions import compare_versions
 from .types import AttributeValue, Context
 
 MISSING = object()
-PORTABLE_TIMESTAMP = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]{1,9})?(?:Z|[+-][0-9]{2}:[0-9]{2})$")
+PORTABLE_TIMESTAMP = re.compile(r"^([0-9]{4})-([0-9]{2})-([0-9]{2})T([0-9]{2}):([0-9]{2}):([0-9]{2})(?:\.([0-9]{1,9}))?(?:Z|([+-])([0-9]{2}):([0-9]{2}))$")
 MIN_PORTABLE_DATE = dt.datetime(1, 1, 1, tzinfo=dt.timezone.utc)
 MAX_PORTABLE_DATE = dt.datetime(9999, 12, 31, 23, 59, 59, 999000, tzinfo=dt.timezone.utc)
 
@@ -113,12 +113,18 @@ def _to_datetime(value: Any) -> dt.datetime | None:
         if native_offset is None or abs(native_offset) > dt.timedelta(hours=14):
             return None
         parsed = value
-    elif isinstance(value, str) and PORTABLE_TIMESTAMP.fullmatch(value):
-        offset = value[-6:] if value[-1] != "Z" else "+00:00"
-        if offset != "+00:00" and (int(offset[1:3]) > 14 or int(offset[4:]) > 59 or (offset[1:3] == "14" and offset[4:] != "00")):
-            return None
+    elif isinstance(value, str) and (parts := PORTABLE_TIMESTAMP.fullmatch(value)):
+        year, month, day, hour, minute, second, fraction, sign, offset_hours, offset_minutes = parts.groups()
+        offset = dt.timedelta()
+        if sign is not None:
+            if int(offset_hours) > 14 or int(offset_minutes) > 59 or (offset_hours == "14" and offset_minutes != "00"):
+                return None
+            offset = dt.timedelta(hours=int(offset_hours), minutes=int(offset_minutes)) * (-1 if sign == "-" else 1)
+        # The constructor rejects hour 24, leap seconds and impossible dates on every Python
+        # version. fromisoformat does not: 3.10 rejects most fractions and 3.14 accepts 24:00.
         try:
-            parsed = dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+            parsed = dt.datetime(int(year), int(month), int(day), int(hour), int(minute), int(second),
+                                 int((fraction or "")[:6].ljust(6, "0")), tzinfo=dt.timezone(offset))
         except ValueError:
             return None
     else:

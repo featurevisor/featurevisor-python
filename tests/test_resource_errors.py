@@ -6,6 +6,7 @@ from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import patch
 
 from featurevisor import create_featurevisor
+from featurevisor._json import strict_json_loads
 from featurevisor._evaluation_session import EvaluationSession, RequirementInputError
 from featurevisor._evaluation_session import dependency_of
 
@@ -21,6 +22,16 @@ def feature(**values):
 def aliases():
     return {**{str(i): {"type": "integer", "compose": str(i + 1)} for i in range(256)},
             "256": {"type": "integer", "defaultValue": 7}}
+
+
+DEEP_JSON = "[" * 10000 + "0" + "]" * 10000
+
+
+def exhausted_on_deep_json(source):
+    # Python 3.12 and later can decode this depth, so the decoder's exhaustion is simulated.
+    if source == DEEP_JSON:
+        raise RecursionError("maximum recursion depth exceeded while decoding a JSON array")
+    return strict_json_loads(source)
 
 
 class ResourceErrorTests(unittest.TestCase):
@@ -120,11 +131,12 @@ class ResourceErrorTests(unittest.TestCase):
         self.assertTrue(f.is_enabled("healthy", {}, options))
         self.assert_clean(session)
 
+    @patch("featurevisor.instance.strict_json_loads", exhausted_on_deep_json)
     def test_json_decoder_exhaustion_is_not_an_ordinary_null_dependency(self):
         # The source getter still has ordinary JSON parsing semantics. Once used
         # as a dependency, host exhaustion must abort its entire requester.
         f = self.instance(variables={
-            "source": {"type": "json", "defaultValue": "[" * 10000 + "0" + "]" * 10000},
+            "source": {"type": "json", "defaultValue": DEEP_JSON},
             "alias": {"type": "json", "compose": "source"},
             "map": {"type": "object", "compose": [{"key": "good", "variable": "healthy"},
                                                         {"key": "bad", "variable": "source"}]},
@@ -139,6 +151,22 @@ class ResourceErrorTests(unittest.TestCase):
         self.assert_error(f.evaluate_flag("root"), feature_key="root")
         self.assertFalse(f.is_enabled("root"))
         self.assertEqual(f.get_variable("healthy"), 7)
+
+    def test_condition_parse_exhaustion_is_not_cached_as_invalid_conditions(self):
+        # A feature first read near the host limit must still match once the stack is shallow.
+        errors = []
+        f = create_featurevisor({"logLevel": "error", "datafile": {
+            "schemaVersion": "4", "revision": "parse", "segments": {}, "features": {"leaf": {
+                "bucketBy": "userId", "traffic": [{"key": "all", "percentage": 100000,
+                                                   "conditions": '[{"attribute": "userId", "operator": "exists"}]'}],
+            }},
+        }, "onDiagnostic": lambda diagnostic: errors.append(diagnostic["code"]) if diagnostic["level"] == "error" else None})
+        self.addCleanup(f.close)
+        with patch("featurevisor.normalize.strict_json_loads", side_effect=RecursionError), \
+                patch("featurevisor.evaluation_data_provider.strict_json_loads", side_effect=RecursionError):
+            self.assertFalse(f.is_enabled("leaf", {"userId": "u"}))
+        self.assertTrue(f.is_enabled("leaf", {"userId": "u"}))
+        self.assertEqual(errors, ["evaluation_error"])
 
     def test_feature_flag_exhaustion_cannot_continue_into_variation_or_variable(self):
         f = self.instance(features={"source": feature()})

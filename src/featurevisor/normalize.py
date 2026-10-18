@@ -38,6 +38,9 @@ def normalize_entity(kind: str, key: str, value: dict[str, Any], legacy: bool = 
             return expression
         try:
             return strict_json_loads(expression)
+        except RecursionError:
+            # Host exhaustion fails the current call and must not cache the entity as invalid.
+            raise
         except Exception as exc:
             errors.append({"level": "error", "code": "conditions_parse_error",
                            "message": "Error parsing conditions", "originalError": exc,

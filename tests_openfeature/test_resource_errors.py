@@ -8,7 +8,18 @@ from openfeature.exception import ErrorCode
 from openfeature.flag_evaluation import Reason
 
 from featurevisor import create_featurevisor
+from featurevisor._json import strict_json_loads
 from featurevisor.openfeature import FeaturevisorOpenFeatureProvider
+
+
+DEEP_JSON = "[" * 10000 + "0" + "]" * 10000
+
+
+def exhausted_on_deep_json(source):
+    # Python 3.12 and later can decode this depth, so the decoder's exhaustion is simulated.
+    if source == DEEP_JSON:
+        raise RecursionError("maximum recursion depth exceeded while decoding a JSON array")
+    return strict_json_loads(source)
 
 
 class ProviderResourceErrorTests(unittest.TestCase):
@@ -26,7 +37,7 @@ class ProviderResourceErrorTests(unittest.TestCase):
             "256": {"type": "integer", "defaultValue": 7},
             "map": {"type": "object", "compose": [{"key": "good", "variable": "256"},
                                                         {"key": "bad", "variable": "0"}]},
-            "json": {"type": "json", "defaultValue": "[" * 10000 + "0" + "]" * 10000},
+            "json": {"type": "json", "defaultValue": DEEP_JSON},
         })
         f = create_featurevisor({"logLevel": "fatal", "datafile": {
             "schemaVersion": "4", "revision": "resource", "segments": {}, "variables": variables,
@@ -66,6 +77,7 @@ class ProviderResourceErrorTests(unittest.TestCase):
                 self.assertEqual(healthy.value, 7)
                 self.assertIsNone(healthy.error_code)
 
+    @patch("featurevisor.openfeature.strict_json_loads", exhausted_on_deep_json)
     def test_json_resource_errors_return_general_for_both_variable_kinds(self):
         provider = self.provider()
         for key in ("variable:json", "json:copy"):
