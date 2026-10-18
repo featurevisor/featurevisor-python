@@ -16,7 +16,7 @@ def get_value_by_type(value: Any, field_type: str) -> Any:
         if isinstance(value, float) and value.is_integer():
             return int(value)
         return None
-    if field_type == "double":
+    if field_type == "number":
         if isinstance(value, bool) or not isinstance(value, (int, float)):
             return None
         result = float(value)

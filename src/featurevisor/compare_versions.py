@@ -3,14 +3,15 @@ from __future__ import annotations
 import re
 
 SEMVER_REGEX = re.compile(
-    r"(?i)^[v^~<>=]*?(\d+)(?:\.([x*]|\d+)(?:\.([x*]|\d+)(?:\.([x*]|\d+))?(?:-([\da-z\-]+(?:\.[\da-z\-]+)*))?(?:\+[\da-z\-]+(?:\.[\da-z\-]+)*)?)?)?$"
+    r"^[v^~<>=]*?([0-9]+)(?:\.([x*]|[0-9]+)(?:\.([x*]|[0-9]+)(?:\.([x*]|[0-9]+))?(?:-([0-9a-z\-]+(?:\.[0-9a-z\-]+)*))?(?:\+[0-9a-z\-]+(?:\.[0-9a-z\-]+)*)?)?)?$",
+    re.IGNORECASE | re.ASCII,
 )
 
 
 def validate_and_parse(version: str) -> list[str]:
-    if not version:
+    if not isinstance(version, str) or not version:
         raise ValueError("invalid argument expected string")
-    match = SEMVER_REGEX.match(version)
+    match = SEMVER_REGEX.fullmatch(version)
     if not match:
         raise ValueError(f"invalid argument not valid semver ('{version}' received)")
     return [group or "" for group in match.groups()]
@@ -20,30 +21,28 @@ def is_wildcard(value: str) -> bool:
     return value in {"*", "x", "X"}
 
 
-def try_parse(value: str):
-    try:
-        return int(value)
-    except ValueError:
-        return value
-
-
-def compare_strings(a: str, b: str) -> int:
-    if is_wildcard(a) or is_wildcard(b):
+def compare_strings(a: str, b: str, prerelease: bool = False) -> int:
+    if not prerelease and (is_wildcard(a) or is_wildcard(b)):
         return 0
-    parsed_a = try_parse(a)
-    parsed_b = try_parse(b)
-    if type(parsed_a) is not type(parsed_b):
-        parsed_a = str(parsed_a)
-        parsed_b = str(parsed_b)
-    return (parsed_a > parsed_b) - (parsed_a < parsed_b)
+    an = bool(re.fullmatch(r"[0-9]+", a))
+    bn = bool(re.fullmatch(r"[0-9]+", b))
+    if an and bn:
+        a, b = a.lstrip("0") or "0", b.lstrip("0") or "0"
+        if len(a) != len(b):
+            return 1 if len(a) > len(b) else -1
+    elif prerelease and an != bn:
+        return -1 if an else 1
+    return (a > b) - (a < b)
 
 
-def compare_segments(a: list[str], b: list[str]) -> int:
+def compare_segments(a: list[str], b: list[str], prerelease: bool = False) -> int:
     max_len = max(len(a), len(b))
     for index in range(max_len):
-        left = a[index] if index < len(a) else "0"
-        right = b[index] if index < len(b) else "0"
-        result = compare_strings(left, right)
+        if prerelease and (index == len(a) or index == len(b)):
+            return 1 if len(a) > len(b) else -1
+        left = (a[index] if index < len(a) else "0") or "0"
+        right = (b[index] if index < len(b) else "0") or "0"
+        result = compare_strings(left, right, prerelease)
         if result:
             return result
     return 0
@@ -58,8 +57,7 @@ def compare_versions(v1: str, v2: str) -> int:
     if result:
         return result
     if p1 and p2:
-        return compare_segments(p1.split("."), p2.split("."))
+        return compare_segments(p1.split("."), p2.split("."), True)
     if p1 or p2:
         return -1 if p1 else 1
     return 0
-

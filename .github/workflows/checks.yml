@@ -59,6 +59,7 @@ jobs:
       - name: Verify source distribution contents
         run: |
           tar -tzf dist/featurevisor-*.tar.gz | grep '/conformance/sdk-v3.json$'
+          tar -tzf dist/featurevisor-*.tar.gz | grep '/conformance/sdk-v4-cases.json$'
           tar -tzf dist/featurevisor-*.tar.gz | grep '/tests/test_sdk.py$'
           tar -tzf dist/featurevisor-*.tar.gz | grep '/tests_openfeature/test_provider.py$'
 
@@ -107,10 +108,10 @@ jobs:
       - name: Install Python SDK
         run: python -m pip install -e .
 
-      - name: Set up Featurevisor v3 example-1 project
+      - name: Set up Featurevisor example-1 project
         run: |
           mkdir example-1
-          (cd example-1 && npx --yes @featurevisor/cli@3.x init --example=1)
+          (cd example-1 && npx --yes @featurevisor/cli@latest init --example=1)
           (cd example-1 && npm install)
           (cd example-1 && npx featurevisor build)
           (cd example-1 && npx featurevisor test)

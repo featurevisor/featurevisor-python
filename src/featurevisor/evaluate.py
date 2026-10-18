@@ -1,18 +1,16 @@
 from __future__ import annotations
 
-import json
 from enum import Enum
 from typing import Any
 
 from .bucketer import get_bucket_key, get_bucketed_number
+from ._evaluation_session import EvaluationSession, RequirementInputError, dependency_of, refresh_evaluation_state
 
 
 class EvaluationReason(str, Enum):
     FEATURE_NOT_FOUND = "feature_not_found"
     DISABLED = "disabled"
-    REQUIRED = "required"
-    REQUIRED_FEATURES_UNMET = "required_features_unmet"
-    OUT_OF_RANGE = "out_of_range"
+    CONDITIONS_UNMET = "conditions_unmet"
     NO_VARIATIONS = "no_variations"
     VARIATION_DISABLED = "variation_disabled"
     VARIABLE_NOT_FOUND = "variable_not_found"
@@ -20,6 +18,7 @@ class EvaluationReason(str, Enum):
     VARIABLE_DISABLED = "variable_disabled"
     VARIABLE_OVERRIDE_VARIATION = "variable_override_variation"
     VARIABLE_OVERRIDE_RULE = "variable_override_rule"
+    VARIABLE_COMPOSED = "variable_composed"
     NO_MATCH = "no_match"
     FORCED = "forced"
     STICKY = "sticky"
@@ -32,28 +31,60 @@ class EvaluationReason(str, Enum):
 
 
 def evaluate_with_modules(options: dict[str, Any]) -> dict[str, Any]:
+    session: EvaluationSession = options.get("_evaluationSession") or EvaluationSession()
+    options = {**options, "_evaluationSession": session}
+    refresh_evaluation_state(options)
+    cache_key = None
     try:
-        modules_manager = options["modulesManager"]
-        current_options = modules_manager.run_before_modules(options)
-        current_options = modules_manager.run_before_evaluation_modules(current_options)
-        evaluation = evaluate(current_options)
-        if (
-            "defaultVariationValue" in current_options
-            and evaluation["type"] == "variation"
-            and "variationValue" not in evaluation
-            and "variation" not in evaluation
-        ):
-            evaluation["variationValue"] = current_options["defaultVariationValue"]
-        if (
-            "defaultVariableValue" in current_options
-            and evaluation["type"] == "variable"
-            and "variableValue" not in evaluation
-        ):
-            evaluation["variableValue"] = current_options["defaultVariableValue"]
-        evaluation = modules_manager.run_after_evaluation_modules(evaluation, current_options)
-        evaluation = modules_manager.run_after_modules(evaluation, current_options)
-        return evaluation
+        with session.frame(options):
+            session.retain(options)
+            cache_key = session.key(options)
+            cached = session.get(cache_key)
+            if cached is not None:
+                return cached
+            modules_manager = options["modulesManager"]
+            module_options = None
+            current_options = options
+            if modules_manager.modules:
+                private = {key: value for key, value in options.items()
+                           if key == "_evaluationSession" or key.startswith("__featurevisor_")}
+                module_options = {key: value for key, value in options.items() if key not in private}
+                module_options = modules_manager.run_before_evaluation_modules(module_options, session.retain)
+                current_options = {**module_options, **private}
+                session.retain(current_options)
+            session.update(current_options)
+            refresh_evaluation_state(current_options)
+            evaluation = evaluate(current_options)
+            if isinstance(evaluation.get("error"), RequirementInputError):
+                raise evaluation["error"]
+            if (
+                "defaultVariationValue" in current_options
+                and evaluation["type"] == "variation"
+                and "variationValue" not in evaluation
+                and "variation" not in evaluation
+            ):
+                evaluation["variationValue"] = current_options["defaultVariationValue"]
+            if (
+                "defaultVariableValue" in current_options
+                and evaluation["type"] == "variable"
+                and "variableValue" not in evaluation
+            ):
+                evaluation["variableValue"] = current_options["defaultVariableValue"]
+            # Evaluation callbacks may install a module after the initial
+            # empty-list check. Its after hook must still see public options.
+            if modules_manager.modules:
+                if module_options is None:
+                    module_options = {key: value for key, value in options.items()
+                                      if key != "_evaluationSession" and not key.startswith("__featurevisor_")}
+                evaluation = modules_manager.run_after_evaluation_modules(evaluation, module_options)
+            if cache_key == session.key(options):
+                snapshot = session.put(cache_key, evaluation)
+                if snapshot is not None:
+                    return snapshot
+            return evaluation
     except Exception as exc:
+        if isinstance(exc, RecursionError):
+            exc = RequirementInputError("Host recursion limit exceeded during dependency evaluation")
         evaluation = {
             "type": options["type"],
             "featureKey": options["featureKey"],
@@ -61,64 +92,20 @@ def evaluate_with_modules(options: dict[str, Any]) -> dict[str, Any]:
             "reason": EvaluationReason.ERROR,
             "error": exc,
         }
-        options["diagnostics"].error("Error during evaluation", evaluation)
+        # A dependency failure fails the complete public call. Nested getters raise it
+        # again, so only the call that started the session reports it.
+        if options.get("dependencyOf") is None or not isinstance(exc, RequirementInputError):
+            options["diagnostics"].error("Error during evaluation", evaluation)
+        if cache_key == session.key(options):
+            session.put(cache_key, evaluation)
         return evaluation
-
-
-def _normalise_requirements(requirements: Any) -> list[Any]:
-    if requirements is None:
-        return []
-    return requirements if isinstance(requirements, list) else [requirements]
-
-
-def _required_features_are_matched(requirements: Any, options: dict[str, Any]) -> bool:
-    for required in _normalise_requirements(requirements):
-        if isinstance(required, str):
-            feature_key, expected_enabled, expected_variation = required, True, None
-        elif "feature" in required:
-            feature_key = required["feature"]
-            expected_enabled = required.get("enabled", True)
-            expected_variation = required.get("variation")
-        else:
-            feature_key = required["key"]
-            expected_enabled = True
-            expected_variation = required.get("variation")
-
-        nested = {
-            key: value
-            for key, value in options.items()
-            if key not in {"type", "featureKey", "variableKey", "defaultVariationValue", "defaultVariableValue"}
-        }
-        flag = evaluate_with_modules({**nested, "type": "flag", "featureKey": feature_key})
-        if (flag.get("enabled") is True) != expected_enabled:
-            return False
-        if expected_variation is not None:
-            variation = evaluate_with_modules({**nested, "type": "variation", "featureKey": feature_key})
-            actual = variation.get("variationValue")
-            if actual is None and variation.get("variation"):
-                actual = variation["variation"].get("value")
-            if actual != expected_variation:
-                return False
-    return True
 
 
 def _find_override_index(overrides: list[dict[str, Any]], context: dict[str, Any], datafile, options: dict[str, Any]) -> int:
     for index, override in enumerate(overrides):
-        if not _required_features_are_matched(override.get("requiredFeatures"), options):
+        if "conditions" not in override or not datafile.conditions_are_matched(override["conditions"], options):
             continue
-        conditions_match = True
-        segments_match = True
-        if override.get("conditions"):
-            conditions = override["conditions"]
-            if isinstance(conditions, str) and conditions != "*":
-                conditions = json.loads(conditions)
-            conditions_match = datafile.all_conditions_are_matched(conditions, context)
-        if override.get("segments"):
-            segments_match = datafile.all_segments_are_matched(
-                datafile.parse_segments_if_stringified(override["segments"]), context
-            )
-        if conditions_match and segments_match:
-            return index
+        return index
     return -1
 
 
@@ -136,6 +123,8 @@ def evaluate(options: dict[str, Any]) -> dict[str, Any]:
     try:
         if type_ != "flag":
             flag = evaluate({**options, "type": "flag"})
+            if isinstance(flag.get("error"), RequirementInputError):
+                raise flag["error"]
             if flag.get("enabled") is False:
                 evaluation = {"type": type_, "featureKey": feature_key, "reason": EvaluationReason.DISABLED}
                 feature = datafile.get_feature(feature_key)
@@ -175,7 +164,7 @@ def evaluate(options: dict[str, Any]) -> dict[str, Any]:
         if sticky and sticky.get(feature_key):
             item = sticky[feature_key]
             if type_ == "flag" and "enabled" in item:
-                evaluation = {"type": type_, "featureKey": feature_key, "reason": EvaluationReason.STICKY, "sticky": item, "enabled": item["enabled"]}
+                evaluation = {"type": type_, "featureKey": feature_key, "reason": EvaluationReason.STICKY, "stickyFeature": item, "enabled": item["enabled"]}
                 diagnostics.debug("using sticky enabled", evaluation)
                 return evaluation
             if type_ == "variation" and "variation" in item:
@@ -216,7 +205,7 @@ def evaluate(options: dict[str, Any]) -> dict[str, Any]:
             diagnostics.warn("no variations", evaluation)
             return evaluation
 
-        force_result = datafile.get_matched_force(feature, context)
+        force_result = datafile.get_matched_force(feature, context, options)
         force = force_result.get("force")
         force_index = force_result.get("forceIndex")
         if force:
@@ -244,19 +233,14 @@ def evaluate(options: dict[str, Any]) -> dict[str, Any]:
                 diagnostics.debug("forced variable", evaluation)
                 return evaluation
 
-        required_features = feature.get("requiredFeatures") or feature.get("required")
-        if type_ == "flag" and required_features:
-            if not _required_features_are_matched(required_features, options):
-                evaluation = {
-                    "type": type_,
-                    "featureKey": feature_key,
-                    "reason": EvaluationReason.REQUIRED,
-                    "required": feature.get("required"),
-                    "requiredFeatures": feature.get("requiredFeatures"),
-                    "enabled": False,
-                }
-                diagnostics.debug("required features not enabled", evaluation)
-                return evaluation
+        if type_ == "flag" and "conditions" in feature and not datafile.conditions_are_matched(feature["conditions"], options):
+            evaluation = {
+                "type": type_, "featureKey": feature_key,
+                "reason": EvaluationReason.CONDITIONS_UNMET,
+                "conditions": feature["conditions"], "enabled": False,
+            }
+            diagnostics.debug("root conditions did not match", evaluation)
+            return evaluation
 
         bucket_key = get_bucket_key(featureKey=feature_key, bucketBy=feature["bucketBy"], context=context, diagnostics=diagnostics)
         bucket_key = modules_manager.run_bucket_key_modules(
@@ -267,7 +251,7 @@ def evaluate(options: dict[str, Any]) -> dict[str, Any]:
             {"featureKey": feature_key, "bucketKey": bucket_key, "context": context, "bucketValue": bucket_value}
         )
 
-        matched_traffic = datafile.get_matched_traffic(feature["traffic"], context)
+        matched_traffic = datafile.get_matched_traffic(feature["traffic"], context, options)
         matched_allocation = datafile.get_matched_allocation(matched_traffic, bucket_value) if type_ != "flag" and matched_traffic else None
 
         if matched_traffic:
@@ -285,31 +269,6 @@ def evaluate(options: dict[str, Any]) -> dict[str, Any]:
                 diagnostics.debug("matched rule with 0 percentage", evaluation)
                 return evaluation
             if type_ == "flag":
-                if feature.get("ranges"):
-                    matched_range = next((range_ for range_ in feature["ranges"] if range_[0] <= bucket_value < range_[1]), None)
-                    if matched_range:
-                        evaluation = {
-                            "type": type_,
-                            "featureKey": feature_key,
-                            "reason": EvaluationReason.ALLOCATED,
-                            "bucketKey": bucket_key,
-                            "bucketValue": bucket_value,
-                            "ruleKey": matched_traffic["key"],
-                            "traffic": matched_traffic,
-                            "enabled": matched_traffic.get("enabled", True),
-                        }
-                        diagnostics.debug("matched", evaluation)
-                        return evaluation
-                    evaluation = {
-                        "type": type_,
-                        "featureKey": feature_key,
-                        "reason": EvaluationReason.OUT_OF_RANGE,
-                        "bucketKey": bucket_key,
-                        "bucketValue": bucket_value,
-                        "enabled": False,
-                    }
-                    diagnostics.debug("not matched", evaluation)
-                    return evaluation
                 if "enabled" in matched_traffic:
                     evaluation = {
                         "type": type_,
@@ -480,6 +439,10 @@ def evaluate(options: dict[str, Any]) -> dict[str, Any]:
         diagnostics.debug("nothing matched", evaluation)
         return evaluation
     except Exception as exc:
+        if isinstance(exc, RecursionError):
+            exc = RequirementInputError("Host recursion limit exceeded during dependency evaluation")
         evaluation = {"type": type_, "featureKey": feature_key, "variableKey": variable_key, "reason": EvaluationReason.ERROR, "error": exc}
-        diagnostics.error("Error during evaluation", evaluation)
+        # evaluate_with_modules raises dependency failures again and reports them once.
+        if not isinstance(exc, RequirementInputError):
+            diagnostics.error("Error during evaluation", evaluation)
         return evaluation

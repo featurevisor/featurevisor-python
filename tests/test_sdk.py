@@ -418,9 +418,9 @@ class SDKTests(unittest.TestCase):
     def test_child_close_removes_delegated_subscriptions_and_empty_sticky_is_isolated(self) -> None:
         instance = create_featurevisor({
             "logLevel": "fatal",
-            "sticky": {"test": {"enabled": True}},
+            "stickyFeatures": {"test": {"enabled": True}},
         })
-        child = instance.spawn({}, {"sticky": {}})
+        child = instance.spawn({}, {"stickyFeatures": {}})
         delegated = []
         child.on("datafile_set", lambda details: delegated.append(details))
 

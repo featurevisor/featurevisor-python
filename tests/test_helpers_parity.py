@@ -31,8 +31,10 @@ class HelpersParityTests(unittest.TestCase):
         self.assertIsNone(get_value_by_type("1", "integer"))
         self.assertIsNone(get_value_by_type(1.5, "integer"))
 
-    def test_should_return_double_if_the_value_is_a_double(self) -> None:
-        self.assertIsNone(get_value_by_type("1.1", "double"))
+    def test_should_return_number_if_the_value_is_a_number(self) -> None:
+        self.assertIsNone(get_value_by_type("1.1", "number"))
+        self.assertEqual(get_value_by_type(1.1, "number"), 1.1)
+        self.assertEqual(get_value_by_type(2, "number"), 2.0)
 
     def test_should_return_null_for_non_boolean_values(self) -> None:
         self.assertIsNone(get_value_by_type("true", "boolean"))

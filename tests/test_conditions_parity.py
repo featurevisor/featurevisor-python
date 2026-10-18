@@ -7,10 +7,32 @@ import unittest
 sys.path.insert(0, "src")
 
 from featurevisor.evaluation_data_provider import _InstanceEvaluationDataProvider
+from featurevisor.conditions import _to_datetime
 from featurevisor.diagnostics import _create_evaluation_diagnostics
 
 
 class ConditionsParityTests(unittest.TestCase):
+    def test_portable_string_fractional_precision(self) -> None:
+        expected = _to_datetime("2024-01-01T00:00:00.123Z")
+        for digits in ("1239", "123999", "1239999", "123999999"):
+            with self.subTest(digits=digits):
+                self.assertEqual(_to_datetime(f"2024-01-01T00:00:00.{digits}Z"), expected)
+        self.assertIsNone(_to_datetime("2024-01-01T00:00:00.1234567890Z"))
+        self.assertEqual(
+            _to_datetime("1969-12-31T23:59:59.999999999Z"),
+            dt.datetime(1969, 12, 31, 23, 59, 59, 999000, tzinfo=dt.timezone.utc),
+        )
+
+    def test_host_dates_floor_pre_epoch_milliseconds_and_require_timezone(self) -> None:
+        host = dt.datetime(1969, 12, 31, 23, 59, 59, 999500, tzinfo=dt.timezone.utc)
+        self.assertEqual(
+            _to_datetime(host),
+            dt.datetime(1969, 12, 31, 23, 59, 59, 999000, tzinfo=dt.timezone.utc),
+        )
+        self.assertIsNone(_to_datetime(host.replace(tzinfo=None)))
+        wide = dt.timezone(dt.timedelta(hours=15))
+        self.assertIsNone(_to_datetime(dt.datetime(2024, 1, 1, 15, tzinfo=wide)))
+
     @classmethod
     def setUpClass(cls) -> None:
         cls.reader = _InstanceEvaluationDataProvider(
@@ -24,6 +46,41 @@ class ConditionsParityTests(unittest.TestCase):
     def test_should_match_all_via_star(self) -> None:
         self.assertTrue(self.reader.allConditionsAreMatched("*", {"browser_type": "chrome"}))
         self.assertFalse(self.reader.allConditionsAreMatched("blah", {"browser_type": "chrome"}))
+
+    def test_empty_and_not_empty_use_shallow_supported_contents(self) -> None:
+        cases = [
+            ("empty", "", True),
+            ("notEmpty", "", False),
+            ("empty", " ", False),
+            ("notEmpty", " ", True),
+            ("empty", [], True),
+            ("notEmpty", [None], True),
+            ("empty", {}, True),
+            ("notEmpty", {"value": None}, True),
+            ("empty", None, False),
+            ("notEmpty", None, False),
+            ("empty", 0, False),
+            ("notEmpty", False, False),
+            ("empty", (), False),
+            ("notEmpty", (), False),
+        ]
+        for operator, value, expected in cases:
+            with self.subTest(operator=operator, value=value):
+                self.assertEqual(
+                    self.reader.allConditionsAreMatched(
+                        [{"attribute": "profile.value", "operator": operator}],
+                        {"profile": {"value": value}},
+                    ),
+                    expected,
+                )
+
+        for operator in ("empty", "notEmpty"):
+            self.assertFalse(
+                self.reader.allConditionsAreMatched(
+                    [{"attribute": "profile.missing", "operator": operator}],
+                    {"profile": {}},
+                )
+            )
 
     def test_operator_cases(self) -> None:
         cases = [

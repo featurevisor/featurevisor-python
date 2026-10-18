@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "featurevisor"
-version = "3.1.0"
-description = "Featurevisor Python SDK"
+version = "4.0.0"
+description = "Featurevisor SDK for Python: feature flags, experiments and remote configuration"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [

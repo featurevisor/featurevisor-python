@@ -1,14 +1,19 @@
 from __future__ import annotations
 
 import math
+import json
 import unittest
+from pathlib import Path
 from datetime import datetime, timedelta, timezone
+from threading import Event
 from unittest.mock import patch
 
 from openfeature import api
 from openfeature.evaluation_context import EvaluationContext
-from openfeature.exception import ErrorCode
+from openfeature.exception import ErrorCode, ParseError
+from openfeature.event import ProviderEvent
 from openfeature.flag_evaluation import Reason
+from openfeature.track import TrackingEventDetails
 
 from featurevisor import create_featurevisor
 from featurevisor.openfeature import FeaturevisorOpenFeatureProvider
@@ -84,6 +89,136 @@ def datafile():
 
 
 class OpenFeatureProviderTest(unittest.TestCase):
+    def test_owned_provider_still_suppresses_default_console_diagnostics(self):
+        with patch("featurevisor.instance.write_diagnostic_to_console") as console:
+            provider = FeaturevisorOpenFeatureProvider({"datafile": "{"})
+            self.assertEqual(provider.resolve_boolean_details("checkout", False).error_code, ErrorCode.PARSE_ERROR)
+            provider.featurevisor.set_datafile(datafile(), True)
+            provider.shutdown()
+            console.assert_not_called()
+
+    def test_initial_health_is_independent_of_logging_and_preserves_options(self):
+        invalid = {"schemaVersion": "2", "revision": "x", "features": [], "segments": {}}
+        for level in ("info", "error", "fatal"):
+            for value in (invalid, json.dumps(invalid), "{", "null", {}, False,
+                          {**datafile(), "variables": []}):
+                for callback_key in ("onDiagnostic", "on_diagnostic"):
+                    with self.subTest(level=level, value=value, callback_key=callback_key):
+                        diagnostics, revisions, closed = [], [], []
+                        callback = diagnostics.append
+                        modules = [{"setup": lambda module: revisions.append(module["getRevision"]()),
+                                    "close": lambda: closed.append(True)}]
+                        options = {"datafile": value, "logLevel": level, callback_key: callback,
+                                   "modules": modules, "context": {"country": "nl"}}
+                        provider = FeaturevisorOpenFeatureProvider(options)
+                        self.assertEqual(revisions, ["unknown"])
+                        self.assertIs(options[callback_key], callback)
+                        self.assertIs(options["modules"], modules)
+                        self.assertEqual(provider.resolve_boolean_details("checkout", True).error_code, ErrorCode.PARSE_ERROR)
+                        with self.assertRaises(ParseError):
+                            provider.initialize(EvaluationContext())
+                        self.assertEqual(sum(d["code"] == "invalid_datafile" for d in diagnostics), 0 if level == "fatal" else 1)
+                        events = []
+                        provider.attach(lambda _, event, details: events.append((event, details.error_code)))
+                        provider.featurevisor.set_datafile(datafile(), True)
+                        provider.initialize(EvaluationContext())
+                        self.assertEqual(provider.resolve_string_details("variable:supportEmail", "").value, "nl@example.com")
+                        provider.featurevisor.set_datafile(invalid, True)
+                        self.assertEqual(events, [(ProviderEvent.PROVIDER_READY, None),
+                                                  (ProviderEvent.PROVIDER_ERROR, ErrorCode.PARSE_ERROR)])
+                        provider.shutdown()
+                        provider.shutdown()
+                        self.assertEqual(closed, [True])
+
+    def test_invalid_owned_registration_fails_and_recovers_through_api(self):
+        provider = FeaturevisorOpenFeatureProvider({"datafile": {"schemaVersion": "2", "revision": "x", "features": [], "segments": {}}, "logLevel": "fatal"})
+        with self.assertRaises(ParseError):
+            api.set_provider_and_wait(provider)
+        provider.featurevisor.set_datafile(datafile(), True)
+        self.assertTrue(api.get_client().get_boolean_value("checkout", False))
+
+    def test_client_preserves_explicit_empty_targeting_key(self):
+        fixture = json.loads((Path(__file__).resolve().parents[1] / "conformance/openfeature-provider.json").read_text())
+        provider = FeaturevisorOpenFeatureProvider({"datafile": fixture["datafile"], "logLevel": "fatal"})
+        api.set_provider_and_wait(provider)
+        client = api.get_client()
+        fields = {"userId": "forced"}
+        self.assertTrue(client.get_boolean_value("targetOnly", False, EvaluationContext(attributes=fields)))
+        self.assertTrue(client.get_boolean_value("targetOnly", False, EvaluationContext(targeting_key="", attributes=fields)))
+        self.assertFalse(client.get_boolean_value("targetOnly", False, EvaluationContext(attributes={"userId": ""})))
+        self.assertFalse(client.get_boolean_value("targetOnly", False, EvaluationContext(targeting_key="other", attributes=fields)))
+        self.assertEqual(fields, {"userId": "forced"})
+        custom = FeaturevisorOpenFeatureProvider({"datafile": fixture["datafile"], "logLevel": "fatal"}, targeting_key_field="accountId")
+        api.set_provider_and_wait(custom)
+        account = {"accountId": "old"}
+        self.assertFalse(api.get_client().get_boolean_value("accountTargeted", False, EvaluationContext(targeting_key="", attributes=account)))
+        self.assertTrue(api.get_client().get_boolean_value("accountTargeted", False, EvaluationContext(attributes={"accountId": ""})))
+        self.assertEqual(account, {"accountId": "old"})
+
+    def test_shared_provider_conformance(self):
+        fixture = json.loads((Path(__file__).resolve().parents[1] / "conformance/openfeature-provider.json").read_text())
+        self.assertEqual(fixture["kind"], "featurevisor.openfeature-provider")
+        self.assertEqual(fixture["schemaVersion"], 1)
+        self.assertEqual(len(fixture["cases"]), 16)
+        provider = FeaturevisorOpenFeatureProvider({"datafile": fixture["datafile"], "logLevel": "fatal"})
+        resolvers = {
+            "boolean": provider.resolve_boolean_details,
+            "string": provider.resolve_string_details,
+            "object": provider.resolve_object_details,
+        }
+        api.set_provider_and_wait(provider)
+        client = api.get_client()
+        client_resolvers = {"boolean": client.get_boolean_details,
+                            "string": client.get_string_details,
+                            "object": client.get_object_details}
+        for case in fixture["cases"]:
+            with self.subTest(case=case["name"]):
+                source = json.loads(json.dumps(case["context"]))
+                context = EvaluationContext(targeting_key=source.pop("targetingKey", None), attributes=source)
+                result = resolvers[case["type"]](case["flagKey"], case["default"], context)
+                self.assertEqual(result.value, case["expected"]["value"])
+                if "reason" in case["expected"]:
+                    self.assertEqual(result.reason.value if hasattr(result.reason, "value") else result.reason, case["expected"]["reason"])
+                self.assertEqual(result.error_code.value if result.error_code else None, case["expected"].get("errorCode"))
+                if "variant" in case["expected"]:
+                    self.assertEqual(result.variant, case["expected"]["variant"])
+                client_result = client_resolvers[case["type"]](case["flagKey"], case["default"], context)
+                self.assertEqual(client_result.value, case["expected"]["value"])
+                self.assertEqual(client_result.error_code, result.error_code)
+                self.assertEqual(client_result.reason, result.reason)
+                self.assertEqual(client_result.variant, result.variant)
+                self.assertEqual(context.attributes, source)
+        for case in fixture["targetingCases"]:
+            with self.subTest(case=case["name"]):
+                source = json.loads(json.dumps(case["context"]))
+                fields = source.copy()
+                key = fields.pop("targetingKey", None)
+                context = EvaluationContext(targeting_key=key, attributes=fields)
+                result = provider.resolve_boolean_details("targetOnly", False, context)
+                self.assertEqual(result.value, case["expectedValue"])
+                self.assertEqual(context.attributes, fields)
+        provider.shutdown()
+        custom = FeaturevisorOpenFeatureProvider({"datafile": fixture["datafile"], "logLevel": "fatal"}, targeting_key_field="accountId")
+        case = fixture["customTargetingCase"]
+        fields = case["context"].copy()
+        key = fields.pop("targetingKey")
+        result = custom.resolve_boolean_details(case["flagKey"], False, EvaluationContext(targeting_key=key, attributes=fields))
+        self.assertEqual(result.value, case["expectedValue"])
+        custom.shutdown()
+
+    def test_borrowed_instance_parse_error_recovery_and_cleanup(self):
+        f = create_featurevisor({"datafile": datafile(), "logLevel": "fatal"})
+        provider = FeaturevisorOpenFeatureProvider(featurevisor=f)
+        self.assertIs(f.set_datafile("{"), False)
+        self.assertEqual(provider.resolve_boolean_details("checkout", False).error_code, ErrorCode.PARSE_ERROR)
+        self.assertIs(f.set_datafile(datafile(), replace=True), True)
+        self.assertIsNone(provider.resolve_boolean_details("checkout", False).error_code)
+        provider.shutdown()
+        self.assertIs(f.set_datafile("{"), False)
+        self.assertIsNone(provider.resolve_boolean_details("checkout", False).error_code)
+        f.close()
+        self.assertIs(f.set_datafile(datafile()), False)
+
     def tearDown(self) -> None:
         api.shutdown()
 
@@ -126,7 +261,7 @@ class OpenFeatureProviderTest(unittest.TestCase):
                 "modules": [
                     {
                         "name": "capture",
-                        "before": lambda options: contexts.append(options["context"]) or options,
+                        "beforeEvaluation": lambda options: contexts.append(options["context"]) or options,
                     }
                 ],
             },
@@ -259,10 +394,22 @@ class OpenFeatureProviderTest(unittest.TestCase):
         self.assertEqual(variation.value, "off")
         self.assertEqual(variation.reason, Reason.DISABLED)
 
+    def test_real_unmet_feature_requirement_maps_to_disabled(self):
+        content = datafile()
+        content["features"]["checkout"]["requiredFeatures"] = ["missing"]
+        f = create_featurevisor({"datafile": content, "logLevel": "fatal"})
+        self.addCleanup(f.close)
+        provider = FeaturevisorOpenFeatureProvider(featurevisor=f)
+        self.addCleanup(provider.shutdown)
+        result = provider.resolve_boolean_details("checkout", True)
+        self.assertIs(result.value, False)
+        self.assertEqual(result.reason, Reason.DISABLED)
+        self.assertEqual(result.flag_metadata["featurevisorReason"], "conditions_unmet")
+        self.assertIsNone(result.error_code)
+
     def test_maps_all_featurevisor_reasons(self):
         mappings = {
-            "required": Reason.TARGETING_MATCH,
-            "required_features_unmet": Reason.DISABLED,
+            "conditions_unmet": Reason.DISABLED,
             "forced": Reason.TARGETING_MATCH,
             "sticky": Reason.TARGETING_MATCH,
             "rule": Reason.TARGETING_MATCH,
@@ -272,7 +419,6 @@ class OpenFeatureProviderTest(unittest.TestCase):
             "disabled": Reason.DISABLED,
             "variation_disabled": Reason.DISABLED,
             "variable_disabled": Reason.DISABLED,
-            "out_of_range": Reason.DEFAULT,
             "no_match": Reason.DEFAULT,
             "variable_default": Reason.DEFAULT,
         }
@@ -405,6 +551,65 @@ class OpenFeatureProviderTest(unittest.TestCase):
         api.set_provider_and_wait(provider)
         client = api.get_client()
         self.assertTrue(client.get_boolean_value("checkout", False, EvaluationContext(targeting_key="user")))
+
+    def test_client_resolution_tracking_updates_and_shutdown(self):
+        for borrowed in (False, True):
+            with self.subTest(borrowed=borrowed):
+                tracked, closed, events = [], [], []
+                error_received, ready_received = Event(), Event()
+                options = {"datafile": datafile(), "logLevel": "fatal",
+                           "modules": [{"close": lambda: closed.append(True)}]}
+                f = create_featurevisor(options) if borrowed else None
+                provider = FeaturevisorOpenFeatureProvider(
+                    options, featurevisor=f,
+                    on_track=lambda *args: tracked.append(args),
+                )
+                try:
+                    api.set_provider_and_wait(provider)
+                    client = api.get_client()
+                    client.add_handler(ProviderEvent.PROVIDER_ERROR, lambda _: (events.append("error"), error_received.set()))
+                    client.add_handler(ProviderEvent.PROVIDER_READY, lambda _: (events.append("ready"), ready_received.set()))
+                    self.assertTrue(ready_received.wait(2))
+                    context = EvaluationContext(targeting_key="user", attributes={"country": "nl"})
+                    self.assertEqual(client.get_string_value("variable:supportEmail", "", context), "nl@example.com")
+                    self.assertEqual(client.get_integer_value("checkout:count", 0, context), 3)
+                    self.assertEqual(client.get_float_value("checkout:ratio", 0.0, context), 1.5)
+                    self.assertEqual(client.get_object_value("checkout:json", {}, context), {"nested": True})
+                    missing = client.get_boolean_details("missing", True)
+                    self.assertTrue(missing.value)
+                    self.assertEqual(missing.error_code, ErrorCode.FLAG_NOT_FOUND)
+                    mismatch = client.get_integer_details("checkout:ratio", 9)
+                    self.assertEqual(mismatch.value, 9)
+                    self.assertEqual(mismatch.error_code, ErrorCode.TYPE_MISMATCH)
+                    details = TrackingEventDetails(3, {"currency": "EUR"})
+                    client.track("purchase", context, details)
+                    self.assertEqual(tracked[0][0], "purchase")
+                    self.assertEqual(tracked[0][1].targeting_key, "user")
+                    self.assertIs(tracked[0][2], details)
+                    updated = datafile()
+                    updated["features"]["checkout"]["variations"][0]["variables"]["title"] = "Updated"
+                    self.assertTrue(provider.featurevisor.set_datafile(updated, True))
+                    self.assertEqual(client.get_string_value("checkout:title", ""), "Updated")
+                    self.assertFalse(provider.featurevisor.set_datafile("{"))
+                    self.assertTrue(error_received.wait(2))
+                    self.assertEqual(client.get_boolean_details("checkout", False).reason, Reason.ERROR)
+                    ready_received.clear()
+                    self.assertTrue(provider.featurevisor.set_datafile(updated, True))
+                    self.assertTrue(ready_received.wait(2))
+                    self.assertEqual(client.get_string_value("checkout:title", ""), "Updated")
+                    self.assertEqual(events[-2:], ["error", "ready"])
+                    api.shutdown()
+                    provider.shutdown()
+                    self.assertEqual(closed, [] if borrowed else [True])
+                    if borrowed:
+                        self.assertFalse(f.set_datafile("{"))
+                        self.assertIsNone(provider.datafile_error)
+                finally:
+                    api.shutdown()
+                    provider.shutdown()
+                    if f is not None:
+                        f.close()
+                self.assertEqual(closed, [True])
 
 
 if __name__ == "__main__":
