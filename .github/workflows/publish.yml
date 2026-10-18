@@ -38,6 +38,9 @@ jobs:
           python -m build
           python -m twine check dist/*
 
+      - name: Verify v4 conformance is in the source distribution
+        run: tar -tzf dist/featurevisor-*.tar.gz | grep '/conformance/sdk-v4-cases.json$'
+
       - name: Verify built OpenFeature package
         run: |
           python -m venv /tmp/featurevisor-release

@@ -63,7 +63,7 @@ class InstanceParityTests(unittest.TestCase):
             self.assertEqual(sdk.getVariation("test", context), "control")
             self.assertEqual(captured["bucket"], expected_bucket)
 
-    def test_should_intercept_before_and_after_modules(self) -> None:
+    def test_should_intercept_canonical_evaluation_modules(self) -> None:
         before = {"called": False, "featureKey": "", "variableKey": None}
         sdk = create_featurevisor(
             {
@@ -74,8 +74,8 @@ class InstanceParityTests(unittest.TestCase):
                     "segments": {},
                 },
                 "modules": [
-                    {"name": "before", "before": lambda options: before.update(called=True, featureKey=options["featureKey"], variableKey=options.get("variableKey")) or options},
-                    {"name": "after", "after": lambda evaluation, options: {**evaluation, "variationValue": "control_intercepted"}},
+                    {"name": "before", "beforeEvaluation": lambda options: before.update(called=True, featureKey=options["featureKey"], variableKey=options.get("variableKey")) or options},
+                    {"name": "after", "afterEvaluation": lambda evaluation, options: {**evaluation, "variationValue": "control_intercepted"}},
                 ],
                 "logLevel": "fatal",
             }
@@ -117,7 +117,7 @@ class InstanceParityTests(unittest.TestCase):
                     "revision": "1.0",
                     "features": {
                         "requiredKey": {"key": "requiredKey", "bucketBy": "userId", "variations": [{"value": "control"}, {"value": "treatment"}], "traffic": [{"key": "1", "segments": "*", "percentage": 100000, "allocation": [{"variation": "control", "range": [0, 0]}, {"variation": "treatment", "range": [0, 100000]}]}]},
-                        "myKey": {"key": "myKey", "bucketBy": "userId", "required": [{"key": "requiredKey", "variation": "treatment"}], "traffic": [{"key": "1", "segments": "*", "percentage": 100000, "allocation": []}]},
+                        "myKey": {"key": "myKey", "bucketBy": "userId", "requiredFeatures": [{"feature": "requiredKey", "variation": "treatment"}], "traffic": [{"key": "1", "segments": "*", "percentage": 100000, "allocation": []}]},
                         "deprecatedTest": {"key": "deprecatedTest", "deprecated": True, "bucketBy": "userId", "variations": [{"value": "control"}, {"value": "treatment"}], "traffic": [{"key": "1", "segments": "*", "percentage": 100000, "allocation": [{"variation": "control", "range": [0, 100000]}, {"variation": "treatment", "range": [0, 0]}]}]},
                         "flagOverride": {"key": "flagOverride", "bucketBy": "userId", "traffic": [{"key": "2", "segments": ["netherlands"], "percentage": 100000, "enabled": False, "allocation": []}, {"key": "1", "segments": "*", "percentage": 100000, "allocation": []}]},
                     },
@@ -132,7 +132,7 @@ class InstanceParityTests(unittest.TestCase):
         self.assertTrue(sdk.isEnabled("flagOverride", {"userId": "user-123", "country": "de"}))
         self.assertFalse(sdk.isEnabled("flagOverride", {"userId": "user-123", "country": "nl"}))
 
-    def test_mutually_exclusive_variation_and_variable_cases(self) -> None:
+    def test_ignored_feature_ranges_variation_and_variable_cases(self) -> None:
         bucket = {"value": 10000}
         sdk = create_featurevisor(
             {
@@ -147,7 +147,7 @@ class InstanceParityTests(unittest.TestCase):
                         "mobile": {"key": "mobile", "conditions": '[{"attribute":"device","operator":"equals","value":"mobile"}]'},
                     },
                     "features": {
-                        "mutex": {"key": "mutex", "bucketBy": "userId", "ranges": [[0, 50000]], "traffic": [{"key": "1", "segments": "*", "percentage": 50000, "allocation": []}]},
+                        "mutex": {"key": "mutex", "bucketBy": "userId", "ranges": [[50000, 100000]], "traffic": [{"key": "1", "segments": "*", "percentage": 50000, "allocation": []}]},
                         "test": {
                             "key": "test",
                             "bucketBy": "userId",
@@ -173,6 +173,8 @@ class InstanceParityTests(unittest.TestCase):
         )
         bucket["value"] = 40000
         self.assertTrue(sdk.isEnabled("mutex", {"userId": "123"}))
+        bucket["value"] = 50000
+        self.assertTrue(sdk.isEnabled("mutex", {"userId": "123"}))
         bucket["value"] = 60000
         self.assertFalse(sdk.isEnabled("mutex", {"userId": "123"}))
         self.assertEqual(sdk.getVariation("test", {"userId": "123"}), "treatment")
@@ -186,7 +188,12 @@ class InstanceParityTests(unittest.TestCase):
         self.assertEqual(sdk.getVariableBoolean("test", "showSidebar", {"userId": "123", "country": "nl"}), False)
         self.assertEqual(sdk.getVariableString("test", "sidebarTitle", {"userId": "user-forced-variation", "country": "de"}), "German title")
         self.assertEqual(sdk.getVariableInteger("test", "count", {"userId": "123"}), 0)
-        self.assertEqual(sdk.getVariableDouble("test", "price", {"userId": "123"}), 9.99)
+        self.assertEqual(sdk.getVariableNumber("test", "price", {"userId": "123"}), 9.99)
+        self.assertEqual(sdk.get_variable_number("test", "price", {"userId": "123"}), 9.99)
+        self.assertEqual(sdk.spawn({"userId": "123"}).get_variable_number("test", "price"), 9.99)
+        # The double getters were removed in v4. Datafile double types still read as numbers.
+        self.assertFalse(hasattr(sdk, "get_variable_double") or hasattr(sdk, "getVariableDouble"))
+        self.assertFalse(hasattr(sdk.spawn({}), "get_variable_double"))
         self.assertEqual(sdk.getVariableArray("test", "paymentMethods", {"userId": "123"}), ["paypal", "creditcard"])
         self.assertEqual(sdk.getVariableObject("test", "flatConfig", {"userId": "123"}), {"key": "value"})
         self.assertEqual(sdk.getVariableJSON("test", "nestedConfig", {"userId": "123"}), {"key": {"nested": "value"}})

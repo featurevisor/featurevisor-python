@@ -12,10 +12,8 @@ class FeaturevisorModule:
         self.id = str(uuid.uuid4())
         self.name = options.get("name")
         self.setup = options.get("setup")
-        self.before = options.get("before")
         self.bucket_key = options.get("bucketKey") or options.get("bucket_key")
         self.bucket_value = options.get("bucketValue") or options.get("bucket_value")
-        self.after = options.get("after")
         self.before_evaluation = options.get("beforeEvaluation") or options.get("before_evaluation")
         self.after_evaluation = options.get("afterEvaluation") or options.get("after_evaluation")
         self.close = options.get("close")
@@ -23,11 +21,6 @@ class FeaturevisorModule:
     def call_setup(self, api: dict[str, Any]) -> None:
         if self.setup:
             self.setup(api)
-
-    def call_before(self, options: dict[str, Any]) -> dict[str, Any]:
-        if not self.before:
-            return options
-        return self.before(options)
 
     def call_bucket_key(self, options: dict[str, Any]) -> str:
         if not self.bucket_key:
@@ -38,11 +31,6 @@ class FeaturevisorModule:
         if not self.bucket_value:
             return options["bucketValue"]
         return self.bucket_value(options)
-
-    def call_after(self, evaluation: dict[str, Any], options: dict[str, Any]) -> dict[str, Any]:
-        if not self.after:
-            return evaluation
-        return self.after(evaluation, options)
 
     def call_before_evaluation(self, options: dict[str, Any]) -> dict[str, Any]:
         if not self.before_evaluation:
@@ -112,7 +100,8 @@ class ModulesManager:
                 self._close_module(module)
                 return None
 
-        self.modules.append(module)
+        # Replace membership so an active phase keeps its starting list.
+        self.modules = [*self.modules, module]
 
         def remove() -> None:
             self.remove(module)
@@ -138,16 +127,14 @@ class ModulesManager:
     def get_all(self) -> list[FeaturevisorModule]:
         return list(self.modules)
 
-    def run_before_modules(self, options: dict[str, Any]) -> dict[str, Any]:
+    def run_before_evaluation_modules(self, options: dict[str, Any], on_option: Callable[[dict[str, Any]], None] | None = None) -> dict[str, Any]:
         current = options
-        for module in self.modules:
-            current = module.call_before(current)
-        return current
-
-    def run_before_evaluation_modules(self, options: dict[str, Any]) -> dict[str, Any]:
-        current = options
+        if on_option:
+            on_option(current)
         for module in self.modules:
             current = module.call_before_evaluation(current)
+            if on_option and isinstance(current, dict):
+                on_option(current)
         return current
 
     def run_bucket_key_modules(self, options: dict[str, Any]) -> str:
@@ -161,12 +148,6 @@ class ModulesManager:
         for module in self.modules:
             bucket_value = module.call_bucket_value({**options, "bucketValue": bucket_value})
         return bucket_value
-
-    def run_after_modules(self, evaluation: dict[str, Any], options: dict[str, Any]) -> dict[str, Any]:
-        current = evaluation
-        for module in self.modules:
-            current = module.call_after(current, options)
-        return current
 
     def run_after_evaluation_modules(self, evaluation: dict[str, Any], options: dict[str, Any]) -> dict[str, Any]:
         current = evaluation
@@ -201,10 +182,8 @@ class ModulesManager:
             self.report_diagnostic(diagnostic, module)
 
     getAll = get_all
-    runBeforeModules = run_before_modules
     runBeforeEvaluationModules = run_before_evaluation_modules
     runBucketKeyModules = run_bucket_key_modules
     runBucketValueModules = run_bucket_value_modules
-    runAfterModules = run_after_modules
     runAfterEvaluationModules = run_after_evaluation_modules
     closeAll = close_all

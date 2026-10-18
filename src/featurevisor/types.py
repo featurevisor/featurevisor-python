@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import sys
-from typing import Any, Callable, Literal, TypedDict
+from typing import Any, Callable, Literal, TypeAlias, TypedDict
 
 if sys.version_info >= (3, 11):
     from typing import NotRequired
@@ -44,12 +44,19 @@ class RequiredFeature(TypedDict, total=False):
     variation: VariationValue
 
 
+RequiredFeatureExpression: TypeAlias = str | RequiredFeature | dict[str, list["RequiredFeatureExpression"]]
+RequiredFeatures: TypeAlias = RequiredFeatureExpression | list[RequiredFeatureExpression]
+
+
 class VariableOverride(TypedDict, total=False):
     key: str
     keyPath: list[str]
     conditions: Any
     segments: Any
-    requiredFeatures: str | RequiredFeature | list[str | RequiredFeature]
+    requiredFeatures: RequiredFeatures
+    operations: list[dict[str, Any]]
+    onMatch: int
+    onMiss: int
     value: VariableValue
 
 
@@ -58,11 +65,6 @@ class Variation(TypedDict, total=False):
     weight: int
     variables: dict[VariableKey, VariableValue]
     variableOverrides: dict[VariableKey, list[VariableOverride]]
-
-
-class RequiredFeatureRef(TypedDict, total=False):
-    key: FeatureKey
-    variation: VariationValue
 
 
 class VariableSchema(TypedDict, total=False):
@@ -74,10 +76,13 @@ class VariableSchema(TypedDict, total=False):
 
 
 class GlobalVariable(VariableSchema, total=False):
+    conditions: Any
+    compose: str | list[dict[str, Any]]
     key: VariableKey
     hash: str
-    requiredFeatures: str | RequiredFeature | list[str | RequiredFeature]
+    requiredFeatures: RequiredFeatures
     overrides: list[VariableOverride]
+    overrideProgram: list[VariableOverride]
 
 
 class Allocation(TypedDict):
@@ -86,6 +91,7 @@ class Allocation(TypedDict):
 
 
 class Traffic(TypedDict, total=False):
+    conditions: Any
     key: RuleKey
     segments: Any
     percentage: int
@@ -106,18 +112,17 @@ class Force(TypedDict, total=False):
 
 
 class Feature(TypedDict, total=False):
+    conditions: Any
     key: FeatureKey
     hash: str
     deprecated: bool
-    required: list[str | RequiredFeatureRef]
-    requiredFeatures: str | RequiredFeature | list[str | RequiredFeature]
+    requiredFeatures: RequiredFeatures
     variablesSchema: dict[VariableKey, VariableSchema]
     disabledVariationValue: VariationValue
     variations: list[Variation]
     bucketBy: str | list[str] | dict[str, list[str]]
     traffic: list[Traffic]
     force: list[Force]
-    ranges: list[list[int]]
 
 
 class Segment(TypedDict, total=False):
@@ -139,6 +144,7 @@ class Evaluation(TypedDict, total=False):
     type: Literal["flag", "variation", "variable"]
     featureKey: FeatureKey
     reason: str
+    conditions: Any
     bucketKey: BucketKey
     bucketValue: BucketValue
     ruleKey: RuleKey
@@ -147,9 +153,7 @@ class Evaluation(TypedDict, total=False):
     traffic: Traffic
     forceIndex: int
     force: Force
-    required: list[str | RequiredFeatureRef]
-    requiredFeatures: str | RequiredFeature | list[str | RequiredFeature]
-    sticky: EvaluatedFeature
+    stickyFeature: EvaluatedFeature
     variation: Variation
     variationValue: VariationValue
     variableKey: VariableKey
@@ -159,6 +163,7 @@ class Evaluation(TypedDict, total=False):
     variableOverrideIndex: int
     variableOverrideKey: str
     variableOverridePath: list[str]
+    variableOverridePaths: list[list[str]]
 
 
 class FeaturevisorDiagnostic(TypedDict, total=False):
@@ -173,10 +178,8 @@ class FeaturevisorDiagnostic(TypedDict, total=False):
 
 class FeaturevisorModule(TypedDict, total=False):
     name: str
-    before: Callable[[dict[str, Any]], dict[str, Any]]
     bucketKey: Callable[[dict[str, Any]], BucketKey]
     bucketValue: Callable[[dict[str, Any]], BucketValue]
-    after: Callable[[Evaluation, dict[str, Any]], Evaluation]
     beforeEvaluation: Callable[[dict[str, Any]], dict[str, Any]]
     afterEvaluation: Callable[[Evaluation, dict[str, Any]], Evaluation]
     setup: Callable[[dict[str, Any]], None]

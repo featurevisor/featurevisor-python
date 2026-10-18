@@ -4,13 +4,13 @@ from typing import Any, Callable
 
 LOG_LEVELS = ["fatal", "error", "warn", "info", "debug"]
 DEFAULT_LOG_LEVEL = "info"
+_LOG_LEVEL_INDEX = {level: index for index, level in enumerate(LOG_LEVELS)}
 
 
 def should_report(configured_level: str, diagnostic_level: str) -> bool:
-    try:
-        return LOG_LEVELS.index(configured_level) >= LOG_LEVELS.index(diagnostic_level)
-    except ValueError:
-        return False
+    configured_index = _LOG_LEVEL_INDEX.get(configured_level)
+    diagnostic_index = _LOG_LEVEL_INDEX.get(diagnostic_level)
+    return configured_index is not None and diagnostic_index is not None and configured_index >= diagnostic_index
 
 
 def write_diagnostic_to_console(diagnostic: dict[str, Any]) -> None:
@@ -20,10 +20,17 @@ def write_diagnostic_to_console(diagnostic: dict[str, Any]) -> None:
 class _EvaluationDiagnostics:
     """Evaluator adapter that emits structured diagnostics directly."""
 
-    def __init__(self, report: Callable[[dict[str, Any]], None]) -> None:
+    def __init__(
+        self,
+        report: Callable[[dict[str, Any]], None],
+        is_interested: Callable[[str], bool] | None = None,
+    ) -> None:
         self._report = report
+        self._is_interested = is_interested
 
     def _emit(self, level: str, message: str, details: dict[str, Any] | None = None) -> None:
+        if self._is_interested is not None and not self._is_interested(level):
+            return
         details = dict(details or {})
         explicit_code = details.pop("code", None)
         original_error = details.pop("originalError", details.pop("error", None))

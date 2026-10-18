@@ -1,16 +1,21 @@
 from __future__ import annotations
 
-import json
 import uuid
+from threading import Lock
 from typing import Any, cast
 
 from .child import FeaturevisorChildInstance
+from ._evaluation_session import DependencySnapshot, EvaluationSession, RequirementInputError, dependency_of, refresh_evaluation_state
 from .evaluation_data_provider import _InstanceEvaluationDataProvider
 from .emitter import Emitter
 from .evaluate import evaluate_with_modules
 from .events import get_params_for_datafile_set_event, get_params_for_sticky_features_set_event, get_params_for_sticky_variables_set_event
 from .helpers import get_value_by_type
+from ._json import strict_json_loads
+from .conditions import MISSING, value_is_matched, _strict_equal
+from .normalize import normalize_datafile, InvalidConditions, ConditionsParseFailure
 from .diagnostics import DEFAULT_LOG_LEVEL, LOG_LEVELS, _EvaluationDiagnostics, should_report, write_diagnostic_to_console
+from .mutations import _array_index, apply_variable_operations
 from .modules import FeaturevisorModule, ModulesManager
 from .types import DatafileContent, LogLevel
 
@@ -27,9 +32,15 @@ class Featurevisor:
         self.sticky_features = options.get("stickyFeatures")
         self.sticky_variables = options.get("stickyVariables")
         self.closed = False
+        self._state_version = 0
+        self._datafile_lock = Lock()
         self.module_diagnostic_subscriptions: list[dict[str, Any]] = []
-        self.evaluation_diagnostics = _EvaluationDiagnostics(self.report_diagnostic)
+        self.evaluation_diagnostics = _EvaluationDiagnostics(
+            self.report_diagnostic,
+            self._diagnostic_is_observed,
+        )
         self.datafile = _InstanceEvaluationDataProvider(datafile=empty_datafile, diagnostics=self.evaluation_diagnostics)
+        self.datafile.conditions_are_matched = self._conditions_are_matched
         self.modules_manager = ModulesManager(
             modules=options.get("modules") or [],
             report_diagnostic=self.report_diagnostic,
@@ -53,12 +64,13 @@ class Featurevisor:
             raise ValueError("Invalid log level")
         self.log_level = level
 
-    def set_datafile(self, datafile, replace: bool = False) -> None:
+    def set_datafile(self, datafile, replace: bool = False) -> bool:
+        """Return whether the datafile was accepted, even if unchanged."""
         if self.closed:
-            return
+            return False
 
         try:
-            parsed = json.loads(datafile) if isinstance(datafile, str) else datafile
+            parsed = strict_json_loads(datafile) if isinstance(datafile, str) else datafile
             if not (
                 isinstance(parsed, dict)
                 and isinstance(parsed.get("schemaVersion"), str)
@@ -68,20 +80,39 @@ class Featurevisor:
                 and (parsed.get("variables") is None or isinstance(parsed.get("variables"), dict))
             ):
                 raise ValueError("Invalid datafile")
-            next_datafile = parsed if replace else self._merge_datafiles(self.datafile.get_datafile(), parsed)
-            new_datafile = _InstanceEvaluationDataProvider(datafile=cast(DatafileContent, next_datafile), diagnostics=self.evaluation_diagnostics)
-            details = get_params_for_datafile_set_event(self.datafile, new_datafile, replace)
-            self.datafile = new_datafile
+            errors = []
+            if parsed["schemaVersion"] == "2":
+                parsed, errors = normalize_datafile(parsed)
+            # Serialize read, merge and publication, but never application callbacks.
+            with self._datafile_lock:
+                if self.closed:
+                    return False
+                previous_datafile = self.datafile
+                next_datafile = parsed if replace else self._merge_datafiles(previous_datafile.get_datafile(), parsed)
+                new_datafile = _InstanceEvaluationDataProvider(datafile=cast(DatafileContent, next_datafile), diagnostics=self.evaluation_diagnostics)
+                new_datafile.conditions_are_matched = self._conditions_are_matched
+                if not replace:
+                    incoming = {"feature": parsed.get("features", {}), "segment": parsed.get("segments", {}),
+                                "variable": parsed.get("variables") or {}}
+                    new_datafile.retain_entities(previous_datafile, incoming)
+                details = get_params_for_datafile_set_event(previous_datafile, new_datafile, replace, parsed)
+                self.datafile = new_datafile
+                self._state_version += 1
+            for diagnostic in errors:
+                self.report_diagnostic(diagnostic)
             self.report_diagnostic({"level": "info", "code": "datafile_set", "message": "Datafile set", "details": details})
             self.emitter.trigger("datafile_set", details)
+            return True
         except Exception as exc:
             self.report_diagnostic({"level": "error", "code": "invalid_datafile", "message": "Could not parse datafile", "originalError": exc})
+            return False
 
     def set_sticky_features(self, sticky: dict[str, Any], replace: bool = False) -> None:
         if self.closed:
             return
         previous = self.sticky_features or {}
         self.sticky_features = dict(sticky) if replace else {**(self.sticky_features or {}), **sticky}
+        self._state_version += 1
         params = get_params_for_sticky_features_set_event(previous, self.sticky_features, replace)
         self.report_diagnostic({"level": "info", "code": "sticky_features_set", "message": "Sticky features set", "details": params})
         self.emitter.trigger("sticky_features_set", params)
@@ -91,6 +122,7 @@ class Featurevisor:
             return
         previous = self.sticky_variables or {}
         self.sticky_variables = dict(sticky) if replace else {**(self.sticky_variables or {}), **sticky}
+        self._state_version += 1
         params = get_params_for_sticky_variables_set_event(previous, self.sticky_variables, replace)
         self.report_diagnostic({"level": "info", "code": "sticky_variables_set", "message": "Sticky variables set", "details": params})
         self.emitter.trigger("sticky_variables_set", params)
@@ -119,12 +151,16 @@ class Featurevisor:
     def add_module(self, module: dict[str, Any] | FeaturevisorModule):
         if self.closed:
             return None
-        return self.modules_manager.add(module)
+        added = self.modules_manager.add(module)
+        if added is not None:
+            self._state_version += 1
+        return added
 
     def remove_module(self, name: str) -> None:
         if self.closed:
             return
         self.modules_manager.remove(name)
+        self._state_version += 1
 
     def on(self, event_name, callback):
         if self.closed:
@@ -132,17 +168,20 @@ class Featurevisor:
         return self.emitter.on(event_name, callback)
 
     def close(self) -> None:
-        if self.closed:
-            return
-        self.closed = True
+        with self._datafile_lock:
+            if self.closed:
+                return
+            self.closed = True
         self.modules_manager.close_all()
         self.module_diagnostic_subscriptions = []
+        self.datafile.close()
         self.emitter.clear_all()
 
     def set_context(self, context: dict[str, Any], replace: bool = False) -> None:
         if self.closed:
             return
         self.context = dict(context) if replace else {**self.context, **context}
+        self._state_version += 1
         self.emitter.trigger("context_set", {"context": self.context, "replaced": replace})
         self.report_diagnostic({
             "level": "debug",
@@ -165,18 +204,35 @@ class Featurevisor:
 
     def _get_evaluation_dependencies(self, context: dict[str, Any], options: dict[str, Any] | None = None) -> dict[str, Any]:
         options = options or {}
+        child_version = options.get("__featurevisor_child_state_version")
+        state_version = (lambda: (self._state_version, child_version())) if callable(child_version) else (lambda: self._state_version)
+        generation = state_version()
+        child_source = options.get("__featurevisor_child_sticky_source") or (lambda: (self.sticky_features, self.sticky_variables))
+        child_initial = options.get("__featurevisor_child_initial_sticky", (self.sticky_features, self.sticky_variables))
+        sticky_features = options.get("__featurevisor_child_sticky_features", self.sticky_features)
+        sticky_variables = options.get("__featurevisor_child_sticky_variables", self.sticky_variables)
         dependencies = {
-            "context": self.get_context(context),
+            "context": context if options.get("__featurevisor_context_is_effective") else self.get_context(context),
             "diagnostics": self.evaluation_diagnostics,
             "reportDiagnostic": self.report_diagnostic,
             "modulesManager": self.modules_manager,
             "datafile": self.datafile,
-            "stickyFeatures": (
-                options["__featurevisor_child_sticky_features"]
-                if "__featurevisor_child_sticky_features" in options
-                else self.sticky_features
-            ),
+            "stickyFeatures": sticky_features,
+            "stickyVariables": sticky_variables,
+            "_evaluationSession": options.get("__featurevisor_session") or EvaluationSession(),
+            "__featurevisor_state_version": state_version,
+            "__featurevisor_child_state_version": child_version,
+            "__featurevisor_child_sticky_source": child_source,
+            "__featurevisor_child_initial_sticky": child_initial,
+            "__featurevisor_datafile_source": lambda: self.datafile,
+            "__featurevisor_initial_datafile": self.datafile,
         }
+        # Fresh root inputs already carry current owner maps. Inherited child
+        # and dependency inputs still need their identity based refresh below.
+        if ("__featurevisor_child_sticky_source" not in options
+                or options.get("__featurevisor_refreshed_state_version") == generation):
+            dependencies["__featurevisor_refreshed_state_version"] = generation
+        refresh_evaluation_state(dependencies)
         if "defaultVariationValue" in options:
             dependencies["defaultVariationValue"] = options["defaultVariationValue"]
         if "defaultVariableValue" in options:
@@ -225,9 +281,9 @@ class Featurevisor:
             evaluation = self.evaluate_variable(feature_or_variable_key, variable_key_or_context, context_or_options, options)
             if "variableValue" in evaluation:
                 value = evaluation.get("variableValue")
-                variable_type = evaluation.get("variableSchema", {}).get("type") or evaluation.get("variable", {}).get("type")
-                if variable_type == "json" and isinstance(value, str):
-                    return json.loads(value)
+                variable_type = (evaluation.get("variableSchema") or {}).get("type") or (evaluation.get("variable") or {}).get("type")
+                if variable_type == "json" and isinstance(value, str) and "compose" not in (evaluation.get("variable") or {}):
+                    return strict_json_loads(value)
                 return value
             return None
         except Exception as exc:
@@ -243,8 +299,9 @@ class Featurevisor:
     def get_variable_integer(self, *args):
         return get_value_by_type(self.get_variable(*args), "integer")
 
-    def get_variable_double(self, *args):
-        return get_value_by_type(self.get_variable(*args), "double")
+    def get_variable_number(self, *args):
+        """Return a number variable, whole or fractional, as a float."""
+        return get_value_by_type(self.get_variable(*args), "number")
 
     def get_variable_array(self, *args):
         return get_value_by_type(self.get_variable(*args), "array")
@@ -255,97 +312,357 @@ class Featurevisor:
     def get_variable_json(self, *args):
         return get_value_by_type(self.get_variable(*args), "json")
 
-    def _required_features_are_matched(self, requirements, context, options) -> bool:
-        items = requirements if isinstance(requirements, list) else ([requirements] if requirements is not None else [])
-        clean_options = {
-            key: value
-            for key, value in (options or {}).items()
-            if key not in {"defaultVariationValue", "defaultVariableValue"}
-        }
-        for required in items:
-            if isinstance(required, str):
-                feature_key, expected_enabled, expected_variation = required, True, None
-            else:
-                feature_key = required["feature"]
-                expected_enabled = required.get("enabled", True)
-                expected_variation = required.get("variation")
-            if self.is_enabled(feature_key, context, clean_options) != expected_enabled:
+    def _conditions_are_matched(self, conditions, dependencies) -> bool:
+        try:
+            return self._match_conditions(conditions, dependencies)
+        except ConditionsParseFailure:
+            return False
+
+    def _match_conditions(self, conditions, dependencies) -> bool:
+        if isinstance(conditions, InvalidConditions):
+            raise ConditionsParseFailure()
+        if conditions == "*":
+            return True
+        if isinstance(conditions, str):
+            refresh_evaluation_state(dependencies)
+            session = dependencies["_evaluationSession"]
+            provider = dependencies["datafile"]
+            segment = provider.get_segment(conditions)
+            if segment is None:
                 return False
-            if expected_variation is not None and self.get_variation(feature_key, context, clean_options) != expected_variation:
-                return False
-        return True
+            prepared = provider.get_attribute_selector(segment.get("conditions"))
+            if prepared is not None:
+                return provider.all_conditions_are_matched(prepared, dependencies["context"])
+            if conditions in session.segments:
+                raise RequirementInputError("Circular dependency")
+            if len(session.segments) + len(session.active) - 1 >= 256:
+                raise RequirementInputError("Evaluation dependency depth exceeded")
+            session.segments.add(conditions)
+            try:
+                return self._match_conditions(segment.get("conditions"), dependencies)
+            finally:
+                session.segments.remove(conditions)
+        if isinstance(conditions, dict):
+            if "variable" in conditions:
+                return self._variable_condition_is_matched(conditions, dependencies)
+            if "feature" in conditions:
+                flag = self._evaluate_dependency(conditions, dependencies, "flag")
+                if (flag.get("enabled") is True) != conditions.get("enabled", True):
+                    return False
+                if "variation" in conditions:
+                    variation = self._evaluate_dependency(conditions, dependencies, "variation")
+                    actual = variation.get("variationValue", (variation.get("variation") or {}).get("value"))
+                    return _strict_equal(actual, conditions["variation"])
+                return True
+            if "attribute" in conditions:
+                return dependencies["datafile"].all_conditions_are_matched(conditions, dependencies["context"])
+            for operator in ("and", "or", "not"):
+                if isinstance(conditions.get(operator), list):
+                    items = conditions[operator]
+                    if not items:
+                        return False
+                    if operator == "or":
+                        return any(self._match_conditions(item, dependencies) for item in items)
+                    result = all(self._match_conditions(item, dependencies) for item in items)
+                    return not result if operator == "not" else result
+        if isinstance(conditions, list):
+            return bool(conditions) and all(self._match_conditions(item, dependencies) for item in conditions)
+        return False
+
+    def _evaluate_dependency(self, reference, dependencies, type_, purpose="condition"):
+        session = dependencies["_evaluationSession"]
+        nested = {key: value for key, value in dependencies.items()
+                  if key not in {"type", "featureKey", "variableKey", "defaultVariableValue",
+                                 "defaultVariationValue", "dependencyOf", "dependencyPurpose"}}
+        if reference.get("feature") is None and type_ == "variable":
+            result = self._evaluate_global_variable(reference["variable"], dependencies["context"], {
+                "__featurevisor_session": session, "__dependency_of": session.parent(),
+                "__dependency_purpose": purpose, "__featurevisor_context_is_effective": True,
+                "__featurevisor_child_sticky_features": dependencies.get("stickyFeatures"),
+                "__featurevisor_child_sticky_variables": dependencies.get("stickyVariables"),
+                "__featurevisor_child_state_version": dependencies.get("__featurevisor_child_state_version"),
+                "__featurevisor_child_sticky_source": dependencies.get("__featurevisor_child_sticky_source"),
+                "__featurevisor_child_initial_sticky": dependencies.get("__featurevisor_child_initial_sticky"),
+            })
+        else:
+            result = evaluate_with_modules({
+                **nested, "type": type_, "featureKey": reference["feature"],
+                **({"variableKey": reference["variable"]} if type_ == "variable" else {}),
+                "dependencyOf": session.parent(), "dependencyPurpose": purpose,
+            })
+        if isinstance(result.get("error"), RecursionError):
+            raise RequirementInputError("Host recursion limit exceeded during dependency evaluation") from result["error"]
+        if isinstance(result.get("error"), RequirementInputError):
+            raise result["error"]
+        return result
+
+    def _evaluate_required_variable(self, required: dict[str, Any], dependencies: dict[str, Any], purpose="condition"):
+        evaluation = self._evaluate_dependency(required, dependencies, "variable", purpose)
+        if isinstance(evaluation.get("error"), RequirementInputError):
+            raise evaluation["error"]
+        if isinstance(evaluation, DependencySnapshot) and hasattr(evaluation, "getter_value"):
+            return evaluation.getter_value
+        value = evaluation.get("variableValue")
+        variable_type = (evaluation.get("variableSchema") or {}).get("type") or (evaluation.get("variable") or {}).get("type")
+        if variable_type == "json" and isinstance(value, str) and "compose" not in (evaluation.get("variable") or {}):
+            try:
+                value = strict_json_loads(value)
+            except RecursionError as exc:
+                raise RequirementInputError("Host recursion limit exceeded during dependency evaluation") from exc
+            except Exception as exc:
+                details = {"variableKey": required["variable"]}
+                if "feature" in required:
+                    details["featureKey"] = required["feature"]
+                self.report_diagnostic({"level": "error", "code": "evaluation_error", "message": "getVariable failed", "originalError": exc, "details": details})
+                value = None
+        if isinstance(evaluation, DependencySnapshot):
+            evaluation.getter_value = value
+        return value
+
+    def _variable_condition_is_matched(self, required, dependencies: dict[str, Any]) -> bool:
+        value = self._evaluate_required_variable(required, dependencies)
+        if "path" in required:
+            if not isinstance(required["path"], list):
+                raise RequirementInputError("Variable requirement path must be compiled")
+            for part in required["path"]:
+                if isinstance(part, str) and part in {"__proto__", "prototype", "constructor"}:
+                    raise RequirementInputError("Unsafe variable requirement path")
+                index = _array_index(part)
+                if isinstance(part, (int, float)) and not isinstance(part, bool) and index is None:
+                    raise RequirementInputError("Invalid variable requirement path")
+                if index is not None:
+                    value = value[index] if isinstance(value, list) and index < len(value) else MISSING
+                elif isinstance(part, str):
+                    if isinstance(value, dict):
+                        value = value[part] if part in value else MISSING
+                    elif isinstance(value, list) and part == "length":
+                        value = len(value)
+                    elif (
+                        isinstance(value, list)
+                        and part.isdigit()
+                        and str(int(part)) == part
+                        and int(part) < len(value)
+                    ):
+                        value = value[int(part)]
+                    else:
+                        value = MISSING
+                else:
+                    raise RequirementInputError("Invalid variable requirement path")
+        try:
+            return value_is_matched(value, required, self.datafile.get_regex)
+        except Exception as exc:
+            raise RequirementInputError(str(exc)) from exc
 
     def _evaluate_global_variable(self, variable_key: str, context: dict[str, Any], options: dict[str, Any]):
+        session: EvaluationSession = options.get("__featurevisor_session") or EvaluationSession()
+        options = {**options, "__featurevisor_session": session}
+        identity = {"type": "variable", "variableKey": variable_key}
+        try:
+            with session.frame(identity):
+                return self._evaluate_global_variable_impl(variable_key, context, options, session)
+        except (RequirementInputError, RecursionError) as exc:
+            if isinstance(exc, RecursionError):
+                exc = RequirementInputError("Host recursion limit exceeded during dependency evaluation")
+            return {**identity, "reason": "error", "error": exc}
+
+    def _evaluate_global_variable_impl(self, variable_key: str, context: dict[str, Any], options: dict[str, Any], session: EvaluationSession):
+        options = {
+            **options,
+            "__featurevisor_child_sticky_source": options.get("__featurevisor_child_sticky_source") or
+                (lambda: (self.sticky_features, self.sticky_variables)),
+            "__featurevisor_child_initial_sticky": options.get("__featurevisor_child_initial_sticky",
+                                                               (self.sticky_features, self.sticky_variables)),
+        }
         evaluation_options: dict[str, Any] = {
             "type": "variable",
             "variableKey": variable_key,
-            "context": self.get_context(context),
+            "context": context if options.get("__featurevisor_context_is_effective") else self.get_context(context),
         }
         if "defaultVariableValue" in options:
             evaluation_options["defaultVariableValue"] = options["defaultVariableValue"]
+        if "__dependency_of" in options:
+            evaluation_options["dependencyOf"] = options["__dependency_of"]
+            evaluation_options["dependencyPurpose"] = options.get("__dependency_purpose", "condition")
+        child_version = options.get("__featurevisor_child_state_version")
+        state_version = (lambda: (self._state_version, child_version())) if callable(child_version) else (lambda: self._state_version)
+        evaluation_options["__featurevisor_state_version"] = state_version
+        generation = state_version()
+        session.retain(evaluation_options)
+        sticky_features = options.get("__featurevisor_child_sticky_features", self.sticky_features)
+        sticky_variables = options.get("__featurevisor_child_sticky_variables", self.sticky_variables)
+        child_source = options.get("__featurevisor_child_sticky_source")
+        child_initial = options.get("__featurevisor_child_initial_sticky")
+        if callable(child_source) and isinstance(child_initial, tuple):
+            current_features, current_variables = child_source()
+            baseline = list(child_initial)
+            if sticky_features is child_initial[0]:
+                sticky_features = current_features
+                baseline[0] = current_features
+            if sticky_variables is child_initial[1]:
+                sticky_variables = current_variables
+                baseline[1] = current_variables
+            options["__featurevisor_child_initial_sticky"] = tuple(baseline)
+        # These inherited maps were just refreshed. Reuse that generation only
+        # if callbacks and diagnostics leave both owners unchanged.
+        options["__featurevisor_refreshed_state_version"] = generation
+        # Outer requests cannot reuse a dependency memo entry.
+        cache_key = session.key({
+            **evaluation_options,
+            "datafile": self.datafile,
+            "modulesManager": self.modules_manager,
+            "stickyFeatures": sticky_features,
+            "stickyVariables": sticky_variables,
+        }) if "dependencyOf" in evaluation_options else None
+        cached = session.get(cache_key)
+        if cached is not None:
+            return cached
+        input_options = evaluation_options
         try:
-            evaluation_options = self.modules_manager.run_before_evaluation_modules(evaluation_options)
+            had_modules = bool(self.modules_manager.modules)
+            if had_modules:
+                evaluation_options = self.modules_manager.run_before_evaluation_modules(
+                    {key: value for key, value in evaluation_options.items() if not key.startswith("__featurevisor_")},
+                    session.retain,
+                )
+            session.update(evaluation_options)
             resolved_key = evaluation_options["variableKey"]
             resolved_context = evaluation_options["context"]
+            nested_options = {**options, "__dependency_of": session.parent(),
+                              "__featurevisor_context_is_effective": True}
             variable = self.datafile.get_global_variable(resolved_key)
             evaluation: dict[str, Any] = {
                 "type": "variable", "variableKey": resolved_key, "reason": "variable_not_found"
             }
-            sticky = options.get("__featurevisor_child_sticky_variables", self.sticky_variables) or {}
+            dependencies = {
+                **self._get_evaluation_dependencies(resolved_context, {
+                    **nested_options, "__featurevisor_session": session,
+                    "__featurevisor_child_sticky_features": evaluation_options.get("stickyFeatures", sticky_features),
+                    "__featurevisor_child_sticky_variables": evaluation_options.get("stickyVariables", sticky_variables),
+                }),
+                "type": "variable", "variableKey": resolved_key,
+            }
+            sticky = dependencies.get("stickyVariables") or {}
 
             if resolved_key in sticky:
                 evaluation.update(reason="sticky", variable=variable, variableValue=sticky[resolved_key])
             elif variable:
-                if not self._required_features_are_matched(variable.get("requiredFeatures"), resolved_context, options):
-                    evaluation.update(reason="required_features_unmet", variable=variable)
-                    value_key = "defaultValue" if variable.get("useDefaultWhenDisabled") else "disabledValue"
+                composed = "compose" in variable
+                if "conditions" in variable and not self._conditions_are_matched(variable["conditions"], dependencies):
+                    evaluation.update(reason="conditions_unmet", variable=variable, conditions=variable["conditions"])
+                    value_key = "defaultValue" if not composed and variable.get("useDefaultWhenDisabled") else "disabledValue"
                     if value_key in variable:
-                        evaluation["variableValue"] = variable[value_key]
+                        value = variable[value_key]
+                        evaluation["variableValue"] = dict(value) if isinstance(variable.get("compose"), list) and isinstance(value, dict) else value
+                    elif composed:
+                        evaluation["variableValue"] = None
                 else:
-                    for index, override in enumerate(variable.get("overrides", [])):
-                        if not self._required_features_are_matched(override.get("requiredFeatures"), resolved_context, options):
-                            continue
-                        conditions_match = not override.get("conditions") or self.datafile.all_conditions_are_matched(
-                            self.datafile.parse_conditions_if_stringified(override["conditions"]), resolved_context
+                    source_value = self._compose_variable(variable["compose"], dependencies) if composed else variable.get("defaultValue")
+                    program = variable.get("overrideProgram")
+                    overrides = program if program is not None else (variable.get("overrides") or [])
+                    accumulated_value = source_value
+                    applied_paths: list[list[str]] = []
+                    matched_index: int | None = None
+                    matched_override: dict[str, Any] | None = None
+                    index = 0
+                    while index < len(overrides):
+                        override = overrides[index]
+                        matched = "conditions" not in override or self._conditions_are_matched(override["conditions"], dependencies)
+                        if matched:
+                            if program is not None:
+                                accumulated_value = apply_variable_operations(accumulated_value, override.get("operations"))
+                                applied_paths.append(override.get("keyPath") or [override.get("key")])
+                            matched_index = index
+                            matched_override = override
+                            if program is None:
+                                break
+                        next_index = override.get("onMatch" if matched else "onMiss") if program is not None else index + 1
+                        if program is not None and (
+                            not isinstance(next_index, int) or isinstance(next_index, bool)
+                            or next_index <= index or next_index > len(overrides)
+                        ):
+                            raise ValueError("Invalid variable override program jump")
+                        index = next_index
+                    if matched_override is not None:
+                        evaluation.update(
+                            reason="variable_override_rule",
+                            variable=variable,
+                            variableValue=accumulated_value if program is not None else matched_override.get("value"),
+                            variableOverrideIndex=matched_index,
                         )
-                        segments_match = not override.get("segments") or self.datafile.all_segments_are_matched(
-                            self.datafile.parse_segments_if_stringified(override["segments"]), resolved_context
-                        )
-                        if conditions_match and segments_match:
-                            evaluation.update(
-                                reason="variable_override_rule",
-                                variable=variable,
-                                variableValue=override.get("value"),
-                                variableOverrideIndex=index,
-                            )
-                            if override.get("key") is not None:
-                                evaluation["variableOverrideKey"] = override["key"]
-                            if override.get("keyPath") is not None:
-                                evaluation["variableOverridePath"] = override["keyPath"]
-                            break
-                    if evaluation["reason"] == "variable_not_found":
-                        evaluation.update(reason="variable_default", variable=variable)
-                        if "defaultValue" in variable:
-                            evaluation["variableValue"] = variable["defaultValue"]
+                        if "key" in matched_override:
+                            evaluation["variableOverrideKey"] = matched_override["key"]
+                        if "keyPath" in matched_override:
+                            evaluation["variableOverridePath"] = matched_override["keyPath"]
+                        if program is not None:
+                            evaluation["variableOverridePaths"] = applied_paths
+                    else:
+                        evaluation.update(reason="variable_composed" if composed else "variable_default", variable=variable)
+                        if composed or "defaultValue" in variable:
+                            evaluation["variableValue"] = source_value
+                    if isinstance(variable.get("compose"), list) and isinstance(evaluation.get("variableValue"), dict):
+                        evaluation["variableValue"] = dict(evaluation["variableValue"])
                 if variable.get("deprecated"):
                     self.report_diagnostic({
-                        "level": "warn", "code": "variable_deprecated",
+                        "level": "warn", "code": "deprecated_variable",
                         "message": f'Variable "{resolved_key}" is deprecated',
                         "details": {"variableKey": resolved_key, "evaluation": evaluation},
                     })
 
-            if "variableValue" not in evaluation and "defaultVariableValue" in options:
-                evaluation["variableValue"] = options["defaultVariableValue"]
-            evaluation = self.modules_manager.run_after_evaluation_modules(evaluation, evaluation_options)
-            self.report_diagnostic({
-                "level": "debug", "code": str(evaluation["reason"]),
-                "message": "Global variable evaluated", "details": dict(evaluation),
-            })
+            if "variableValue" not in evaluation and "defaultVariableValue" in evaluation_options:
+                evaluation["variableValue"] = evaluation_options["defaultVariableValue"]
+            if self.modules_manager.modules:
+                public_options = (evaluation_options if had_modules else {
+                    key: value for key, value in evaluation_options.items()
+                    if not key.startswith("__featurevisor_")
+                })
+                evaluation = self.modules_manager.run_after_evaluation_modules(evaluation, public_options)
+            if self._diagnostic_is_observed("debug"):
+                self.report_diagnostic({
+                    "level": "debug", "code": str(evaluation["reason"]),
+                    "message": "Global variable evaluated", "details": dict(evaluation),
+                })
+            post_key = session.key({**input_options, "datafile": self.datafile,
+                                    "modulesManager": self.modules_manager,
+                                    "stickyFeatures": sticky_features, "stickyVariables": sticky_variables}) if cache_key is not None else None
+            if cache_key is not None and cache_key == post_key:
+                snapshot = session.put(cache_key, evaluation)
+                if snapshot is not None:
+                    return snapshot
             return evaluation
         except Exception as exc:
-            evaluation = {"type": "variable", "variableKey": variable_key, "reason": "error", "error": exc}
-            self.report_diagnostic({"level": "error", "code": "evaluation_error", "message": "Global variable evaluation failed", "originalError": exc, "details": evaluation})
+            if isinstance(exc, RecursionError):
+                exc = RequirementInputError("Host recursion limit exceeded during dependency evaluation")
+            evaluation = {"type": "variable", "variableKey": evaluation_options["variableKey"], "reason": "error", "error": exc}
+            if evaluation_options.get("dependencyOf") is None or not isinstance(exc, RequirementInputError):
+                self.report_diagnostic({"level": "error", "code": "evaluation_error", "message": "Global variable evaluation failed", "originalError": exc, "details": evaluation})
+            post_key = session.key({**input_options, "datafile": self.datafile,
+                                    "modulesManager": self.modules_manager,
+                                    "stickyFeatures": sticky_features, "stickyVariables": sticky_variables}) if cache_key is not None else None
+            if cache_key is not None and cache_key == post_key:
+                session.put(cache_key, evaluation)
             return evaluation
+
+    def _compose_variable(self, compose, dependencies):
+        if isinstance(compose, str) and compose:
+            return self._evaluate_required_variable({"variable": compose}, dependencies, "composition")
+        if not isinstance(compose, list) or not compose:
+            raise RequirementInputError("Invalid composition")
+        value = {}
+        for reference in compose:
+            key = reference.get("key")
+            if not isinstance(key, str) or not key or key in {"__proto__", "constructor", "prototype"}:
+                raise RequirementInputError("Invalid composition property")
+            if "variable" in reference:
+                member = self._evaluate_required_variable(reference, dependencies, "composition")
+            elif "feature" in reference:
+                type_ = "variation" if reference.get("variation") is True else "flag"
+                result = self._evaluate_dependency(reference, dependencies, type_, "composition")
+                member = (result.get("enabled") is True if type_ == "flag" else
+                          result.get("variationValue", (result.get("variation") or {}).get("value")))
+            else:
+                raise RequirementInputError("Invalid composition source")
+            value[key] = member
+        return value
 
     def get_feature_evaluations(self, context: dict[str, Any] | None = None, feature_keys: list[str] | None = None, options: dict[str, Any] | None = None) -> dict[str, Any]:
         result: dict[str, Any] = {}
@@ -402,8 +719,11 @@ class Featurevisor:
         ]
 
     def report_diagnostic(self, diagnostic: dict[str, Any], source_module: FeaturevisorModule | None = None) -> None:
+        level = (diagnostic or {}).get("level") or "info"
+        if not self._diagnostic_is_observed(level, source_module):
+            return
         diagnostic = dict(diagnostic or {})
-        diagnostic["level"] = diagnostic.get("level") or "info"
+        diagnostic["level"] = level
         if source_module and source_module.name:
             diagnostic["module"] = source_module.name
         details = dict(diagnostic.get("details") or {})
@@ -435,7 +755,21 @@ class Featurevisor:
         if diagnostic["level"] == "error":
             self.emitter.trigger("error", {"diagnostic": diagnostic})
 
-    def _should_report_diagnostic(self, diagnostic_level: LogLevel, subscriber_level: LogLevel) -> bool:
+    def _diagnostic_is_observed(
+        self,
+        diagnostic_level: str,
+        source_module: FeaturevisorModule | None = None,
+    ) -> bool:
+        if diagnostic_level == "error":
+            return True
+        for subscription in self.module_diagnostic_subscriptions:
+            if source_module and subscription["moduleId"] == source_module.id:
+                continue
+            if self._should_report_diagnostic(diagnostic_level, subscription["level"]):
+                return True
+        return self._should_report_diagnostic(diagnostic_level, self.log_level)
+
+    def _should_report_diagnostic(self, diagnostic_level: str, subscriber_level: str) -> bool:
         return should_report(subscriber_level, diagnostic_level)
 
     def _merge_datafiles(self, previous: dict[str, Any], incoming: dict[str, Any]) -> dict[str, Any]:
@@ -472,7 +806,7 @@ class Featurevisor:
     getVariableBoolean = get_variable_boolean
     getVariableString = get_variable_string
     getVariableInteger = get_variable_integer
-    getVariableDouble = get_variable_double
+    getVariableNumber = get_variable_number
     getVariableArray = get_variable_array
     getVariableObject = get_variable_object
     getVariableJSON = get_variable_json

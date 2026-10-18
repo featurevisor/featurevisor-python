@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import math
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
@@ -8,7 +7,8 @@ from typing import Any, Callable
 
 try:
     from openfeature.evaluation_context import EvaluationContext
-    from openfeature.exception import ErrorCode
+    from openfeature.exception import ErrorCode, ParseError
+    from openfeature.event import ProviderEvent, ProviderEventDetails
     from openfeature.flag_evaluation import FlagResolutionDetails, Reason
     from openfeature.provider import AbstractProvider
     from openfeature.provider.metadata import Metadata
@@ -22,10 +22,11 @@ except ModuleNotFoundError as exc:
     raise
 
 from .instance import Featurevisor, create_featurevisor
+from ._json import strict_json_loads
 
 
 class FeaturevisorOpenFeatureProvider(AbstractProvider):
-    """OpenFeature provider backed by the Featurevisor v3 SDK."""
+    """OpenFeature provider backed by the Featurevisor SDK."""
 
     def __init__(
         self,
@@ -52,31 +53,39 @@ class FeaturevisorOpenFeatureProvider(AbstractProvider):
             self.featurevisor = featurevisor
         else:
             featurevisor_options = dict(options or {})
-            datafile = featurevisor_options.get("datafile")
-            if isinstance(datafile, str):
-                try:
-                    json.loads(datafile)
-                except (TypeError, ValueError):
-                    self.datafile_error = "Could not parse datafile"
-            original_handler = featurevisor_options.get("onDiagnostic") or featurevisor_options.get("on_diagnostic")
-
-            def on_diagnostic(diagnostic: dict[str, Any]) -> None:
-                if diagnostic.get("code") == "invalid_datafile":
-                    self.datafile_error = str(diagnostic.get("message"))
-                if diagnostic.get("code") == "datafile_set":
-                    self.datafile_error = None
-                if original_handler:
-                    original_handler(diagnostic)
-
-            featurevisor_options["onDiagnostic"] = on_diagnostic
+            datafile = featurevisor_options.pop("datafile", None)
+            if not (featurevisor_options.get("onDiagnostic") or featurevisor_options.get("on_diagnostic")):
+                featurevisor_options["onDiagnostic"] = lambda _: None
             self.featurevisor = create_featurevisor(featurevisor_options)
-        self._datafile_unsubscribe = self.featurevisor.on("datafile_set", lambda _: setattr(self, "datafile_error", None))
+        self._datafile_unsubscribe = self.featurevisor.on("datafile_set", self._on_datafile_set)
+        self._error_unsubscribe = self.featurevisor.on("error", self._on_error)
+        if self._owns_featurevisor and datafile is not None:
+            self.featurevisor.set_datafile(datafile, True)
+
+    def initialize(self, evaluation_context: EvaluationContext) -> None:
+        if self.datafile_error:
+            raise ParseError(self.datafile_error)
+
+    def _on_datafile_set(self, _: dict[str, Any]) -> None:
+        recovering = self.datafile_error is not None
+        self.datafile_error = None
+        if recovering:
+            self.emit(ProviderEvent.PROVIDER_READY, ProviderEventDetails())
+
+    def _on_error(self, event: dict[str, Any]) -> None:
+        diagnostic = event.get("diagnostic", {})
+        if diagnostic.get("code") == "invalid_datafile":
+            self.datafile_error = str(diagnostic.get("message"))
+            self.emit(ProviderEvent.PROVIDER_ERROR, ProviderEventDetails(
+                message=self.datafile_error, error_code=ErrorCode.PARSE_ERROR,
+            ))
 
     def get_metadata(self) -> Metadata:
         return Metadata(name="Featurevisor")
 
     def shutdown(self) -> None:
         self._datafile_unsubscribe()
+        self._error_unsubscribe()
         if self._owns_featurevisor:
             self.featurevisor.close()
 
@@ -116,9 +125,12 @@ class FeaturevisorOpenFeatureProvider(AbstractProvider):
             evaluation = self.featurevisor.evaluate_variable(selector, context)
             value = evaluation.get("variableValue")
             variable = evaluation.get("variable") or {}
-            if variable.get("type") == "json" and isinstance(value, str):
+            if variable.get("type") == "json" and isinstance(value, str) and "compose" not in variable:
                 try:
-                    value = json.loads(value)
+                    value = strict_json_loads(value)
+                except RecursionError as exc:
+                    return self._error(default_value, ErrorCode.GENERAL, str(exc),
+                                       self._metadata({**evaluation, "reason": "error"}))
                 except (TypeError, ValueError):
                     pass
         elif not selector:
@@ -136,7 +148,10 @@ class FeaturevisorOpenFeatureProvider(AbstractProvider):
             value = evaluation.get("variableValue")
             if evaluation.get("variableSchema", {}).get("type") == "json" and isinstance(value, str):
                 try:
-                    value = json.loads(value)
+                    value = strict_json_loads(value)
+                except RecursionError as exc:
+                    return self._error(default_value, ErrorCode.GENERAL, str(exc),
+                                       self._metadata({**evaluation, "reason": "error"}))
                 except (TypeError, ValueError):
                     pass
 
@@ -158,7 +173,7 @@ class FeaturevisorOpenFeatureProvider(AbstractProvider):
 
     def _context(self, context: EvaluationContext | None) -> dict[str, Any]:
         result = self._normalize(dict(context.attributes)) if context else {}
-        if context and context.targeting_key:
+        if context and context.targeting_key is not None:
             result[self.targeting_key_field] = context.targeting_key
         return result
 
@@ -181,11 +196,11 @@ class FeaturevisorOpenFeatureProvider(AbstractProvider):
     def _reason(reason: str | None) -> Reason:
         if reason in {"feature_not_found", "variable_not_found", "no_variations", "error"}:
             return Reason.ERROR
-        if reason in {"required", "forced", "sticky", "rule", "variable_override_variation", "variable_override_rule"}:
+        if reason in {"forced", "sticky", "rule", "variable_override_variation", "variable_composed", "variable_override_rule"}:
             return Reason.TARGETING_MATCH
         if reason == "allocated":
             return Reason.SPLIT
-        if reason in {"disabled", "required_features_unmet", "variation_disabled", "variable_disabled"}:
+        if reason in {"disabled", "conditions_unmet", "variation_disabled", "variable_disabled"}:
             return Reason.DISABLED
         return Reason.DEFAULT
 
